@@ -114,7 +114,7 @@ def build_sales_heatmap(df_map: pd.DataFrame, map_key: str = "sales_heatmap_dens
     st_folium(
         fmap,
         use_container_width=True,
-        height=600,
+        height=800,
         key=map_key,
         returned_objects=[],
     )

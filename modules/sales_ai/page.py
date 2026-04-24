@@ -44,11 +44,6 @@ use_openai = ai_ready
 # Sidebar: status + filters only
 # =========================
 with st.sidebar:
-    st.markdown("### Sales Agent")
-    st.caption(f"Sellout rows: {db_meta['rows']:,}")
-    st.caption(f"Sellout date range: {db_meta['min_date']} → {db_meta['max_date']}")
-    st.caption(f"Shared model master: {len(model_master):,} models")
-    st.caption("OpenAI: " + ("Connected" if ai_ready else "Not configured"))
 
     if not ai_ready:
         st.info("Add OPENAI_API_KEY to .streamlit/secrets.toml to enable AI analysis.")
@@ -237,7 +232,7 @@ with t3:
 # Q&A below
 # =========================
 st.markdown("---")
-st.subheader("3) Free Q&A")
+st.subheader("3) GPT Q&A")
 st.caption(
     "Ask any sales question. The AI automatically uses current Sales Agent filters plus available Sales Heatmap and Value Chain database context."
 )

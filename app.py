@@ -281,7 +281,7 @@ def render_module_card(col, pill, emoji, title, text, note, module_name, accent=
     href = f"?module={module_name.replace(' ', '%20')}"
     if logged_in and st.session_state.get("auth_user"):
         href += f"&auth=1&user={st.session_state['auth_user']}"
-    status = "ACCESS LOCKED" if is_disabled else ("NOT AVALIABLE" if not logged_in else "AVALIABLE")
+    status = "NOT AVALIABLE" if is_disabled else ("" if not logged_in else "AVALIABLE")
     cls = f"module-card accent-{accent}" + (" disabled-card" if is_disabled else "")
     anchor_open = f'<a class="card-anchor" href="{href}" target="_self">' if not is_disabled else '<div class="card-anchor disabled-anchor">'
     anchor_close = '</a>' if not is_disabled else '</div>'
@@ -315,7 +315,7 @@ st.markdown(
     .hero-title {font-size: 44px; font-weight: 900; margin-top: 8px; margin-bottom: 6px; letter-spacing: .2px;}
     .hero-subtitle {color: #9FB0BD; font-size: 15px; margin-bottom: 28px;}
     a.card-anchor, .disabled-anchor {display:block; text-decoration:none!important; color:inherit!important;}
-    .module-card {position:relative; z-index:1; border:1px solid rgba(255,255,255,.12); border-radius:24px; padding:26px 24px; min-height:320px; box-shadow:0 18px 42px rgba(0,0,0,.28); transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,filter .18s ease; cursor:pointer; overflow:hidden; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.028));}
+    .module-card {position:relative; z-index:1; border:1px solid rgba(255,255,255,.12); border-radius:24px; padding:26px 24px; min-height:200px; box-shadow:0 18px 42px rgba(0,0,0,.28); transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,filter .18s ease; cursor:pointer; overflow:hidden; background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.028));}
     .module-card::before {content:""; position:absolute; inset:0; opacity:.85; z-index:-1;}
     .module-card::after {content:""; position:absolute; right:-42px; bottom:-46px; width:170px; height:170px; border-radius:999px; opacity:.55; pointer-events:none;}
     .module-card:hover {transform:translateY(-5px); box-shadow:0 24px 50px rgba(0,0,0,.34);}
