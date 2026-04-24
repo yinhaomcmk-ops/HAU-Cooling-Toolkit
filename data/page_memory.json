@@ -1,0 +1,17 @@
+{
+  "special": {
+    "selected_product_line": "All",
+    "selected_category": "All",
+    "selected_model": "HRCD615TBWV"
+  },
+  "landed": {
+    "selected_product_line": "All",
+    "selected_category": "All",
+    "selected_model": "HRCD615TBWV"
+  },
+  "overall": {
+    "selected_product_line": "Refrigerator",
+    "selected_category": "Vertical Freezer",
+    "selected_model": "All"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "fx_aud_to_cny": 4.8,
+  "aud_to_usd": 0.63,
+  "sea_freight_usd": 1750.0,
+  "clearance_aud": 3000.0,
+  "insurance_rate": 0.003,
+  "singa_upcost_rate": 0.003,
+  "regular_rebate": 40.0,
+  "promo_rebate": 35.0,
+  "big_rebate": 32.0,
+  "selling_price": 3799.0,
+  "contractual_rebate_pct": 35.0,
+  "other_rebate_pct": 0.0,
+  "other_disc_value": -510.0,
+  "loading_qty": 36
+}

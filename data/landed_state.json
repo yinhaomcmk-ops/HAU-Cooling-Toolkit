@@ -1,0 +1,68 @@
+{
+  "model_overrides": {
+    "HRAF242": {
+      "selling_price": 699.0,
+      "loading_qty": 146,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRCD483G": {
+      "selling_price": 1399.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRCD615TBWV": {
+      "selling_price": 3799.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": -510.0
+    },
+    "ACT-25UR4RCC8": {
+      "selling_price": 699.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0,
+      "loading_qty": 100
+    },
+    "HRBF126": {
+      "selling_price": 299.0,
+      "loading_qty": 285,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRBM418E": {
+      "selling_price": 1399.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRBM418S": {
+      "selling_price": 799.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRCD586TBWB": {
+      "selling_price": 799.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRSBS540SW": {
+      "selling_price": 899.0,
+      "loading_qty": 48,
+      "contractual_rebate_pct": 38.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRSBS540BW": {
+      "selling_price": 999.0,
+      "contractual_rebate_pct": 38.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    }
+  }
+}
