@@ -281,7 +281,7 @@ def render_module_card(col, pill, emoji, title, text, note, module_name, accent=
     href = f"?module={module_name.replace(' ', '%20')}"
     if logged_in and st.session_state.get("auth_user"):
         href += f"&auth=1&user={st.session_state['auth_user']}"
-    status = "NOT AVALIABLE" if is_disabled else ("" if not logged_in else "AVALIABLE")
+    status = "NOT AVALIABLE" if is_disabled else ("NOT AVALIABLE" if not logged_in else "AVALIABLE")
     cls = f"module-card accent-{accent}" + (" disabled-card" if is_disabled else "")
     anchor_open = f'<a class="card-anchor" href="{href}" target="_self">' if not is_disabled else '<div class="card-anchor disabled-anchor">'
     anchor_close = '</a>' if not is_disabled else '</div>'
