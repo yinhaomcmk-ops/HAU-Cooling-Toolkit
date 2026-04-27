@@ -553,7 +553,7 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
     st_folium(
         fmap,
         use_container_width=True,
-        height=600,
+        height=800,
         key=map_key,
         returned_objects=[],
     )
