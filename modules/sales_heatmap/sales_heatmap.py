@@ -88,11 +88,21 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS highlight_stores (
+                business_name TEXT PRIMARY KEY,
+                highlight_color TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         ensure_column(conn, "store_locations", "retailer", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales_records(sales_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_store ON sales_records(business_name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_model ON sales_records(model)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_store_retailer ON store_locations(retailer)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_highlight_store ON highlight_stores(business_name)")
         conn.commit()
 
 
@@ -203,6 +213,61 @@ def normalize_sales_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+
+
+def normalize_highlight_store_df(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df = standardize_columns(df_raw)
+    df = rename_columns_safely(
+        df,
+        {
+            "business_name": ["business name", "business_name", "store name", "store", "customer", "customer name"],
+            "highlight_color": ["highlight color", "highlight_color", "color", "colour", "highlight colour", "highlight_colour"],
+        },
+    )
+    missing = validate_required_columns(df, ["business_name", "highlight_color"])
+    if missing:
+        raise ValueError(f"Highlight Store file missing required columns: {missing}")
+    out = df[["business_name", "highlight_color"]].copy()
+    out["business_name"] = out["business_name"].apply(clean_business_name)
+    out["highlight_color"] = out["highlight_color"].fillna("").astype(str).str.strip()
+    out = out[(out["business_name"] != "") & (out["highlight_color"] != "")]
+    out = out.drop_duplicates(subset=["business_name"], keep="last")
+    return out
+
+
+def read_highlight_stores() -> pd.DataFrame:
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            "SELECT business_name, highlight_color, updated_at FROM highlight_stores ORDER BY business_name", conn
+        )
+
+
+def save_highlight_stores(df: pd.DataFrame, replace_all: bool = False):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    to_save = normalize_highlight_store_df(df)
+    to_save["updated_at"] = now
+    with get_conn() as conn:
+        if replace_all:
+            conn.execute("DELETE FROM highlight_stores")
+        for _, row in to_save.iterrows():
+            conn.execute(
+                """
+                INSERT INTO highlight_stores (business_name, highlight_color, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(business_name) DO UPDATE SET
+                    highlight_color=excluded.highlight_color,
+                    updated_at=excluded.updated_at
+                """,
+                (row["business_name"], row["highlight_color"], row["updated_at"]),
+            )
+        conn.commit()
+
+
+def clear_all_highlight_stores():
+    with get_conn() as conn:
+        conn.execute("DELETE FROM highlight_stores")
+        conn.commit()
+
 def save_store_locations(df: pd.DataFrame, replace_all: bool = False):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     to_save = df.copy()
@@ -283,8 +348,9 @@ def db_summary():
     with get_conn() as conn:
         store_cnt = conn.execute("SELECT COUNT(*) FROM store_locations").fetchone()[0]
         sales_cnt = conn.execute("SELECT COUNT(*) FROM sales_records").fetchone()[0]
+        highlight_cnt = conn.execute("SELECT COUNT(*) FROM highlight_stores").fetchone()[0]
         date_min, date_max = conn.execute("SELECT MIN(sales_date), MAX(sales_date) FROM sales_records").fetchone()
-    return store_cnt, sales_cnt, date_min, date_max
+    return store_cnt, sales_cnt, highlight_cnt, date_min, date_max
 
 
 def get_color(sales_value, q1, q2, q3):
@@ -312,7 +378,7 @@ def top_models_text(df_group, top_n=5):
     return " | ".join(lines)
 
 
-def prepare_analysis_data(store_df: pd.DataFrame, sales_df: pd.DataFrame):
+def prepare_analysis_data(store_df: pd.DataFrame, sales_df: pd.DataFrame, highlight_df: pd.DataFrame | None = None):
     store_sales_summary = (
         sales_df.groupby("business_name", as_index=False)
         .agg(total_sales=("sales", "sum"), model_count=("model", "nunique"))
@@ -337,6 +403,17 @@ def prepare_analysis_data(store_df: pd.DataFrame, sales_df: pd.DataFrame):
     merged_df["model_count"] = merged_df["model_count"].fillna(0).astype(int)
     merged_df["top_models"] = merged_df["top_models"].fillna("No sales data")
 
+    if highlight_df is not None and not highlight_df.empty:
+        highlight_clean = highlight_df[["business_name", "highlight_color"]].copy()
+        highlight_clean["business_name"] = highlight_clean["business_name"].apply(clean_business_name)
+        highlight_clean["highlight_color"] = highlight_clean["highlight_color"].fillna("").astype(str).str.strip()
+        highlight_clean = highlight_clean[highlight_clean["highlight_color"] != ""]
+        highlight_clean = highlight_clean.drop_duplicates(subset=["business_name"], keep="last")
+        merged_df = merged_df.merge(highlight_clean, on="business_name", how="left")
+    else:
+        merged_df["highlight_color"] = ""
+    merged_df["highlight_color"] = merged_df["highlight_color"].fillna("").astype(str).str.strip()
+
     sales_without_location = sales_df[~sales_df["business_name"].isin(store_df["business_name"])].copy()
     sales_without_location_summary = (
         sales_without_location.groupby("business_name", as_index=False)["sales"]
@@ -358,7 +435,7 @@ def add_sales_week_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_folium_map(df_map: pd.DataFrame):
+def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_map"):
     if folium is None or st_folium is None:
         st.error("Please install folium and streamlit-folium first: pip install folium streamlit-folium")
         return
@@ -399,29 +476,37 @@ def build_folium_map(df_map: pd.DataFrame):
 
     for _, row in df_map.iterrows():
         sales = float(row["total_sales"])
-        color = get_color(sales, q1, q2, q3)
+        sales_color = get_color(sales, q1, q2, q3)
+        highlight_color = str(row.get("highlight_color", "") or "").strip()
+        border_color = highlight_color if highlight_color else "rgba(255,255,255,0.95)"
+        border_width = 4 if highlight_color else 2
+        box_shadow = f"0 0 12px {highlight_color}" if highlight_color else f"0 0 8px {sales_color}"
+        highlight_text = highlight_color if highlight_color else "No"
+
         popup_html = f"""
         <div style="min-width:240px;">
             <b>{row['business_name']}</b><br/>
             Retailer: {row['retailer']}<br/>
             Sales: {sales:,.0f}<br/>
             Model Count: {int(row['model_count'])}<br/>
+            Highlight: {highlight_text}<br/>
             Top Models: {row['top_models']}
         </div>
         """
         marker_html = f"""
         <div style="
-            width:12px;
-            height:12px;
+            width:16px;
+            height:16px;
             border-radius:50%;
-            background:{color};
-            border:2px solid rgba(255,255,255,0.95);
-            box-shadow:0 0 8px {color};
+            background:{sales_color};
+            border:{border_width}px solid {border_color};
+            box-shadow:{box_shadow};
+            box-sizing:border-box;
         "></div>
         """
         folium.Marker(
             location=[float(row["latitude"]), float(row["longitude"] )],
-            tooltip=f"{row['business_name']} | Sales: {sales:,.0f}",
+            tooltip=f"{row['business_name']} | Sales: {sales:,.0f}" + (f" | Highlight: {highlight_color}" if highlight_color else ""),
             popup=folium.Popup(popup_html, max_width=320),
             icon=folium.DivIcon(html=marker_html),
         ).add_to(cluster)
@@ -430,7 +515,7 @@ def build_folium_map(df_map: pd.DataFrame):
         fmap,
         use_container_width=True,
         height=720,
-        key="store_sales_cluster_map",
+        key=map_key,
         returned_objects=[],
     )
 
@@ -438,10 +523,11 @@ def build_folium_map(df_map: pd.DataFrame):
 st.sidebar.title("Store Sales Map")
 page = st.sidebar.radio("Navigation", ["Analysis", "Data Upload & Storage"], index=0)
 
-store_cnt, sales_cnt, date_min, date_max = db_summary()
+store_cnt, sales_cnt, highlight_cnt, date_min, date_max = db_summary()
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Saved store locations: {store_cnt:,}")
 st.sidebar.caption(f"Saved sales rows: {sales_cnt:,}")
+st.sidebar.caption(f"Saved highlight stores: {highlight_cnt:,}")
 if date_min and date_max:
     st.sidebar.caption(f"Sales date range: {date_min} → {date_max}")
 
@@ -552,6 +638,7 @@ st.caption("Interactive map with retailer/date/week filters and persistent local
 
 store_df = read_store_locations()
 sales_df = read_sales_records()
+highlight_df = read_highlight_stores()
 
 if store_df.empty:
     st.warning("No saved store location data yet. Please go to 'Data Upload & Storage' and upload the store file first.")
@@ -630,6 +717,7 @@ if not filtered_store_df.empty:
 merged_df, store_model_sales_summary, sales_without_location_summary = prepare_analysis_data(
     filtered_store_df[["business_name", "retailer", "latitude", "longitude"]],
     filtered_sales[["sales_date", "business_name", "model", "sales"]],
+    highlight_df,
 )
 
 if not show_zero_sales:
@@ -637,12 +725,13 @@ if not show_zero_sales:
 else:
     merged_df_display = merged_df.copy()
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Stores with Location", f"{len(filtered_store_df):,}")
 col2.metric("Filtered Sales Volume", f"{filtered_sales['sales'].sum():,.0f}")
 selling_store_mean = merged_df_display.loc[merged_df_display["total_sales"] > 0, "total_sales"].mean()
 col3.metric("Avg Sales / Selling Store", f"{0 if pd.isna(selling_store_mean) else selling_store_mean:,.1f}")
 col4.metric("Models in Filter", f"{filtered_sales['model'].nunique():,}")
+col5.metric("Highlighted Stores", f"{int((merged_df_display['highlight_color'] != '').sum()):,}")
 
 st.markdown("---")
 st.subheader("Overall Store Sales Map")
@@ -659,7 +748,8 @@ map_key = (
     f"{'|'.join(selected_retailers) if selected_retailers else 'all'}_"
     f"{int(show_zero_sales)}_"
     f"{int(round(float(filtered_sales['sales'].sum()), 0))}_"
-    f"{len(merged_df_display)}"
+    f"{len(merged_df_display)}_"
+    f"{int((merged_df_display['highlight_color'] != '').sum())}"
 )
 build_folium_map(merged_df_display, map_key=map_key)
 
@@ -669,7 +759,7 @@ with left:
     st.subheader(f"Top Stores - {selected_model}")
     model_rank_df = merged_df_display.sort_values("total_sales", ascending=False).head(top_n_table)
     st.dataframe(
-        model_rank_df[["business_name", "retailer", "total_sales", "model_count", "top_models"]].reset_index(drop=True),
+        model_rank_df[["business_name", "retailer", "highlight_color", "total_sales", "model_count", "top_models"]].reset_index(drop=True),
         use_container_width=True,
         height=520,
     )
@@ -681,6 +771,7 @@ with right:
     st.write(f"**Model:** {selected_model}")
     st.write(f"**Show zero-sales stores:** {'Yes' if show_zero_sales else 'No'}")
     st.write(f"**Matched stores in view:** {len(merged_df_display):,}")
+    st.write(f"**Highlighted stores in view:** {int((merged_df_display['highlight_color'] != '').sum()):,}")
     st.write(f"**Unmatched sales stores:** {len(sales_without_location_summary):,}")
 
 st.markdown("---")
@@ -688,7 +779,7 @@ tab1, tab2, tab3 = st.tabs(["Store Summary", "Store-Model Summary", "Unmatched S
 with tab1:
     st.subheader("Store Summary")
     store_summary_display = (
-        merged_df[["business_name", "retailer", "latitude", "longitude", "total_sales", "model_count", "top_models"]]
+        merged_df[["business_name", "retailer", "highlight_color", "latitude", "longitude", "total_sales", "model_count", "top_models"]]
         .sort_values("total_sales", ascending=False)
         .reset_index(drop=True)
     )

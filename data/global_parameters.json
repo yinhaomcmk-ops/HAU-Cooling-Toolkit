@@ -8,9 +8,9 @@
   "regular_rebate": 40.0,
   "promo_rebate": 35.0,
   "big_rebate": 32.0,
-  "selling_price": 3799.0,
-  "contractual_rebate_pct": 35.0,
+  "selling_price": 1199.0,
+  "contractual_rebate_pct": 38.0,
   "other_rebate_pct": 0.0,
-  "other_disc_value": -510.0,
-  "loading_qty": 36
+  "other_disc_value": 0.0,
+  "loading_qty": 48
 }

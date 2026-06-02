@@ -1,3 +1,4 @@
+import io
 import json
 from pathlib import Path
 
@@ -251,6 +252,85 @@ def make_overrides_from_df(df_to_store):
     return result
 
 
+def build_batch_template_df(source_df):
+    """
+    Download/upload template.
+    Only EDITABLE_COLS will be written back into cache/state.
+    Other columns are for reference and matching only.
+    """
+    cols = ['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS
+    available_cols = [c for c in cols if c in source_df.columns]
+    template = source_df[available_cols].copy()
+
+    for col in EDITABLE_COLS:
+        if col not in template.columns:
+            template[col] = 0
+
+    return template[['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS]
+
+
+def dataframe_to_excel_bytes(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Overall Input')
+    return output.getvalue()
+
+
+def apply_batch_upload_to_state(uploaded_df, full_source_df, state):
+    """
+    Batch upload only updates:
+    柜量, 常规价, 促销价, 大促价, 常规%, 促销%, 大促%
+    Match key: 客户型号
+    """
+    if uploaded_df is None or uploaded_df.empty:
+        return False, 'Uploaded file is empty.', 0, []
+
+    if '客户型号' not in uploaded_df.columns:
+        return False, 'Upload file must contain 客户型号 column.', 0, []
+
+    missing_edit_cols = [c for c in EDITABLE_COLS if c not in uploaded_df.columns]
+    if missing_edit_cols:
+        return False, f"Upload file is missing editable columns: {', '.join(missing_edit_cols)}", 0, []
+
+    updated_df = full_source_df.copy()
+    uploaded_df = uploaded_df.copy()
+    uploaded_df['客户型号'] = uploaded_df['客户型号'].astype(str).str.strip()
+    updated_df['客户型号'] = updated_df['客户型号'].astype(str).str.strip()
+
+    valid_models = set(updated_df['客户型号'].astype(str).tolist())
+    changed_models = []
+    skipped_models = []
+
+    for _, row in uploaded_df.iterrows():
+        model = str(row['客户型号']).strip()
+        if not model or model not in valid_models:
+            skipped_models.append(model)
+            continue
+
+        mask = updated_df['客户型号'] == model
+        changed = False
+
+        for col in EDITABLE_COLS:
+            if col == '柜量':
+                new_value = safe_int(row[col], 0)
+                old_value = safe_int(updated_df.loc[mask, col].iloc[0], 0)
+            else:
+                new_value = safe_float(row[col], 0.0)
+                old_value = safe_float(updated_df.loc[mask, col].iloc[0], 0.0)
+
+            if new_value != old_value:
+                updated_df.loc[mask, col] = new_value
+                changed = True
+
+        if changed:
+            changed_models.append(model)
+
+    state['model_overrides'] = make_overrides_from_df(updated_df)
+    save_state(state)
+
+    return True, 'Batch upload saved to overall_state.json.', len(changed_models), skipped_models
+
+
 def get_default_competitor_entry():
     return {
         '竞品1品牌': '', '竞品1型号': '', '竞品1常规价': 0.0, '竞品1促销价': 0.0,
@@ -491,6 +571,55 @@ save_page_memory('overall', {
 if filtered_source_df.empty:
     st.warning('当前筛选条件下没有数据。')
     st.stop()
+
+# ===== batch download / upload =====
+with st.expander('Batch Download / Upload', expanded=False):
+    st.caption('Download the current editable table, edit only 柜量 / 常规价 / 促销价 / 大促价 / 常规% / 促销% / 大促%, then upload it back. Changes are saved into data/overall_state.json.')
+
+    template_df = build_batch_template_df(filtered_source_df)
+    c1, c2 = st.columns([1, 2])
+
+    with c1:
+        st.download_button(
+            label='Download Current Editable Table',
+            data=dataframe_to_excel_bytes(template_df),
+            file_name='overall_editable_table.xlsx',
+            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            use_container_width=True,
+        )
+
+    with c2:
+        uploaded_file = st.file_uploader(
+            'Upload Edited Table',
+            type=['xlsx', 'xls', 'csv'],
+            key='overall_batch_upload_file',
+        )
+
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.lower().endswith('.csv'):
+                upload_df = pd.read_csv(uploaded_file)
+            else:
+                upload_df = pd.read_excel(uploaded_file)
+
+            st.info('Only editable columns will be saved: ' + ', '.join(EDITABLE_COLS))
+
+            preview_cols = [c for c in ['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS if c in upload_df.columns]
+            if preview_cols:
+                st.dataframe(upload_df[preview_cols].head(20), use_container_width=True, hide_index=True)
+
+            if st.button('Save Uploaded Changes', key='overall_save_batch_upload', use_container_width=True):
+                ok, msg, changed_count, skipped_models = apply_batch_upload_to_state(upload_df, full_source_df, state)
+                if ok:
+                    st.success(f'{msg} Updated models: {changed_count}.')
+                    if skipped_models:
+                        st.warning('Skipped unmatched models: ' + ', '.join([m for m in skipped_models if m][:20]))
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        except Exception as e:
+            st.error(f'Upload failed: {e}')
 
 # ===== layout =====
 left_col, right_col = st.columns([4, 3], gap='small')
