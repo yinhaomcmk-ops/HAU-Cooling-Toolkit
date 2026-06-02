@@ -115,6 +115,46 @@ def clean_business_name(x):
     return str(x).strip().upper()
 
 
+
+
+def _clean_highlight_key(x):
+    if pd.isna(x):
+        return ""
+    return str(x).strip().upper()
+
+
+def read_highlight_store_records() -> pd.DataFrame:
+    """Read Highlight Store database saved from Database module.
+
+    Expected table: highlight_stores(business_name, highlight_color, updated_at).
+    Returns an empty dataframe if the table has not been created yet.
+    """
+    try:
+        with get_conn() as conn:
+            tables = pd.read_sql_query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='highlight_stores'",
+                conn,
+            )
+            if tables.empty:
+                return pd.DataFrame(columns=["highlight_key", "highlight_color"])
+
+            df = pd.read_sql_query(
+                "SELECT business_name, highlight_color FROM highlight_stores",
+                conn,
+            )
+
+        if df.empty:
+            return pd.DataFrame(columns=["highlight_key", "highlight_color"])
+
+        df["highlight_key"] = df["business_name"].apply(_clean_highlight_key)
+        df["highlight_color"] = df["highlight_color"].fillna("").astype(str).str.strip()
+        df = df[(df["highlight_key"] != "") & (df["highlight_color"] != "")]
+        return df[["highlight_key", "highlight_color"]].drop_duplicates("highlight_key", keep="last")
+
+    except Exception:
+        return pd.DataFrame(columns=["highlight_key", "highlight_color"])
+
+
 def clean_retailer(x):
     if pd.isna(x) or str(x).strip() == "":
         return "Unknown"
@@ -461,6 +501,15 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
     df_map = df_map.copy()
     df_map["total_sales"] = pd.to_numeric(df_map["total_sales"], errors="coerce").fillna(0)
 
+    # Merge Highlight Store records from Database.
+    # This only controls the marker border; the original red/yellow/green sales fill color is unchanged.
+    highlight_df = read_highlight_store_records()
+    if not highlight_df.empty and "business_name" in df_map.columns:
+        df_map["highlight_key"] = df_map["business_name"].apply(_clean_highlight_key)
+        df_map = df_map.merge(highlight_df, on="highlight_key", how="left")
+    else:
+        df_map["highlight_color"] = ""
+
     point_q1, point_q2, point_q3 = _safe_quantile_thresholds(df_map["total_sales"])
 
     positive_points = df_map[df_map["total_sales"] > 0]["total_sales"]
@@ -520,33 +569,63 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
         </div>
         """
 
-        if sales <= point_q1:
-            marker_size = 8
-        elif sales <= point_q2:
-            marker_size = 10
-        elif sales <= point_q3:
-            marker_size = 12
-        else:
-            marker_size = 14
+        # Keep the original premium neon style, but make all store dots the same size.
+        # Sales performance remains the inner fill color. Highlight Store only adds an outer ring.
+        marker_size = 11
+        icon_size = 30
+        icon_anchor = icon_size // 2
 
-        glow = 6 if marker_size <= 8 else 8
+        highlight_color = str(row.get("highlight_color", "") or "").strip()
+        has_highlight = highlight_color != ""
+
+        border_color = "rgba(255,255,255,0.95)"
+        border_width = 2
+
+        if has_highlight:
+            popup_html = popup_html.replace(
+                "</div>",
+                f"Highlight: {highlight_color}<br/></div>"
+            )
+
+        if has_highlight:
+            marker_shadow = (
+                f"0 0 0 4px {highlight_color}, "
+                f"0 0 14px {highlight_color}, "
+                f"0 0 8px {color}"
+            )
+        else:
+            marker_shadow = f"0 0 8px {color}"
 
         marker_html = f"""
         <div data-sales="{sales}" style="
-            width:{marker_size}px;
-            height:{marker_size}px;
-            border-radius:50%;
-            background:{color};
-            border:2px solid rgba(255,255,255,0.95);
-            box-shadow:0 0 {glow}px {color};
-        "></div>
+            width:{icon_size}px;
+            height:{icon_size}px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            overflow:visible;
+        ">
+            <div style="
+                width:{marker_size}px;
+                height:{marker_size}px;
+                border-radius:50%;
+                background:{color};
+                border:{border_width}px solid {border_color};
+                box-shadow:{marker_shadow};
+            "></div>
+        </div>
         """
 
         folium.Marker(
             location=[lat, lon],
             tooltip=f"{row['business_name']} | Sales: {sales:,.0f}",
             popup=folium.Popup(popup_html, max_width=320),
-            icon=folium.DivIcon(html=marker_html),
+            icon=folium.DivIcon(
+                html=marker_html,
+                class_name="sales-neon-marker",
+                icon_size=(icon_size, icon_size),
+                icon_anchor=(icon_anchor, icon_anchor),
+            ),
             salesValue=sales,
         ).add_to(cluster)
 
