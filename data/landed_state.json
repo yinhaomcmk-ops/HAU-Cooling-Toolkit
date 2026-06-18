@@ -2,7 +2,6 @@
   "model_overrides": {
     "HRAF242": {
       "selling_price": 699.0,
-      "loading_qty": 146,
       "contractual_rebate_pct": 35.0,
       "other_rebate_pct": 0.0,
       "other_disc_value": 0.0
@@ -14,10 +13,10 @@
       "other_disc_value": 0.0
     },
     "HRCD615TBWV": {
-      "selling_price": 3799.0,
-      "contractual_rebate_pct": 35.0,
+      "selling_price": 2999.0,
+      "contractual_rebate_pct": 32.0,
       "other_rebate_pct": 0.0,
-      "other_disc_value": -510.0
+      "other_disc_value": 0.0
     },
     "ACT-25UR4RCC8": {
       "selling_price": 699.0,

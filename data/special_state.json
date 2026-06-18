@@ -62,9 +62,23 @@
       "other_disc_value": 0.0
     },
     "HRSBS649SW": {
-      "selling_price": 1199.0,
+      "selling_price": 1299.0,
       "loading_qty": 48,
-      "contractual_rebate_pct": 38.0,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "100飞跃平台-珍珠白": {
+      "selling_price": 2999.0,
+      "loading_qty": 120,
+      "contractual_rebate_pct": 32.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRBM500TBW": {
+      "selling_price": 999.0,
+      "loading_qty": 63,
+      "contractual_rebate_pct": 30.0,
       "other_rebate_pct": 0.0,
       "other_disc_value": 0.0
     }

@@ -214,10 +214,26 @@ def init_sales_agent_db() -> None:
         conn.commit()
 
 
+def init_highlight_store_db() -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS highlight_stores (
+                business_name TEXT PRIMARY KEY,
+                highlight_color TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_highlight_stores_business_name ON highlight_stores(business_name)")
+        conn.commit()
+
+
 def init_all_shared_db() -> None:
     init_product_master_db()
     init_cost_db()
     init_store_db()
+    init_highlight_store_db()
     init_sales_by_stores_db()
     init_sales_agent_db()
 
@@ -666,6 +682,68 @@ clear_all_store_locations = clear_store_master_records
 clear_all_sales_records = clear_sales_by_stores_records
 
 # ============================================================
+# Highlight Store
+# ============================================================
+
+HIGHLIGHT_STORE_ALIASES = {
+    "business_name": ["business name", "business_name", "store name", "store", "customer", "customer name", "门店名"],
+    "highlight_color": ["highlight color", "highlight_color", "highlight colour", "highlight_colour", "color", "colour", "颜色"],
+}
+
+
+def normalize_highlight_store_df(df_raw: pd.DataFrame) -> pd.DataFrame:
+    df = _rename_by_aliases(_standardize_columns(df_raw), HIGHLIGHT_STORE_ALIASES)
+    missing = [c for c in ["business_name", "highlight_color"] if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required Highlight Store columns: {missing}")
+
+    out = df[["business_name", "highlight_color"]].copy()
+    out["business_name"] = out["business_name"].apply(_norm_store)
+    out["highlight_color"] = out["highlight_color"].apply(_norm_text)
+    out = out[(out["business_name"] != "") & (out["highlight_color"] != "")]
+    return out.drop_duplicates(subset=["business_name"], keep="last").reset_index(drop=True)
+
+
+def save_highlight_store_records(df: pd.DataFrame, replace_all: bool = True) -> None:
+    init_highlight_store_db()
+    out = normalize_highlight_store_df(df)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with get_conn() as conn:
+        if replace_all:
+            conn.execute("DELETE FROM highlight_stores")
+        for _, r in out.iterrows():
+            conn.execute(
+                """
+                INSERT INTO highlight_stores (business_name, highlight_color, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(business_name) DO UPDATE SET
+                    highlight_color=excluded.highlight_color,
+                    updated_at=excluded.updated_at
+                """,
+                (r["business_name"], r["highlight_color"], now),
+            )
+        conn.commit()
+    clear_all_caches()
+
+
+def read_highlight_store_records() -> pd.DataFrame:
+    init_highlight_store_db()
+    with get_conn() as conn:
+        return pd.read_sql_query(
+            "SELECT business_name, highlight_color, updated_at FROM highlight_stores ORDER BY business_name",
+            conn,
+        )
+
+
+def clear_highlight_store_records() -> None:
+    init_highlight_store_db()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM highlight_stores")
+        conn.commit()
+    clear_all_caches()
+
+
+# ============================================================
 # Sales Agent
 # ============================================================
 
@@ -798,6 +876,101 @@ def summarize_dataset(df: pd.DataFrame) -> dict:
     }
 
 # ============================================================
+# Excel source bootstrap
+# ============================================================
+
+SOURCE_FILES = {
+    "product_master": "product_model_master.xlsx",
+    "exw_cost": "exw_cost.xlsx",
+    "landed_cost": "landed_cost.xlsx",
+    "store_master": "store_master.xlsx",
+    "highlight_store": "highlight_store.xlsx",
+    "sales_by_stores": "sales_by_stores.xlsx",
+    "sales_agent": "sales_agent.xlsx",
+}
+
+
+def _read_excel_or_csv(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path)
+    return pd.read_excel(path)
+
+
+def _is_database_empty() -> bool:
+    try:
+        init_all_shared_db()
+        required_tables = [
+            "model_master",
+            "exw_cost",
+            "landed_cost",
+            "store_locations",
+            "highlight_stores",
+            "sales_records",
+            "sales_agent_records",
+        ]
+        with get_conn() as conn:
+            total = 0
+            for table in required_tables:
+                if _table_exists(conn, table):
+                    total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            return total == 0
+    except Exception:
+        return True
+
+
+def bootstrap_database_from_excel(force: bool = False) -> dict:
+    """Create/rebuild app_data.db from fixed Excel files under /data.
+
+    Used by app.py at startup so modules still work if data/app_data.db is deleted.
+    Product Master is loaded first because cost and sales records are validated by HAU Model.
+    """
+    data_dir = BASE_DIR / "data"
+    db_path = Path(DB_PATH)
+    should_bootstrap = force or (not db_path.exists()) or _is_database_empty()
+
+    result = {
+        "ran": False,
+        "loaded": {},
+        "errors": {},
+        "db_path": str(db_path),
+    }
+    if not should_bootstrap:
+        return result
+
+    init_all_shared_db()
+    result["ran"] = True
+
+    jobs = [
+        ("Product Master", SOURCE_FILES["product_master"], normalize_product_master_df, save_product_master_records),
+        ("EXW Cost", SOURCE_FILES["exw_cost"], normalize_exw_cost_df, save_exw_cost_records),
+        ("Landed Cost", SOURCE_FILES["landed_cost"], normalize_landed_cost_df, save_landed_cost_records),
+        ("Store Master", SOURCE_FILES["store_master"], normalize_store_master_df, save_store_master_records),
+        ("Highlight Store", SOURCE_FILES["highlight_store"], normalize_highlight_store_df, save_highlight_store_records),
+        ("Sales by Stores", SOURCE_FILES["sales_by_stores"], normalize_sales_by_stores_df, save_sales_by_stores_records),
+        ("Sales Agent", SOURCE_FILES["sales_agent"], normalize_sales_agent_df, save_sales_agent_records),
+    ]
+
+    for label, filename, normalizer, saver in jobs:
+        path = data_dir / filename
+        if not path.exists():
+            result["errors"][label] = f"{filename} not found"
+            continue
+        try:
+            df = normalizer(_read_excel_or_csv(path))
+            save_result = saver(df, replace_all=True)
+            if isinstance(save_result, tuple):
+                saved, ignored = save_result
+                result["loaded"][label] = {"rows": int(saved), "ignored": int(ignored)}
+            else:
+                result["loaded"][label] = {"rows": int(len(df)), "ignored": 0}
+        except Exception as exc:
+            result["errors"][label] = str(exc)
+
+    clear_all_caches()
+    return result
+
+
+# ============================================================
 # Summary / clear all
 # ============================================================
 
@@ -814,7 +987,7 @@ def table_count(table: str) -> int:
 def clear_all_database_records() -> None:
     init_all_shared_db()
     with get_conn() as conn:
-        for table in ["model_master", "exw_cost", "landed_cost", "store_locations", "sales_records", "sales_agent_records"]:
+        for table in ["model_master", "exw_cost", "landed_cost", "store_locations", "highlight_stores", "sales_records", "sales_agent_records"]:
             if _table_exists(conn, table):
                 conn.execute(f"DELETE FROM {table}")
         conn.commit()
