@@ -354,7 +354,9 @@ def build_batch_template_df(source_df):
     Only EDITABLE_COLS will be written back into cache/state.
     Other columns are for reference and matching only.
     """
-    cols = ['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS
+    reference_cols = ['NETNET', '到库成本', '变动费用']
+    base_cols = ['客户型号', '产品线', '品类', '成本月份']
+    cols = base_cols + reference_cols + EDITABLE_COLS
     available_cols = [c for c in cols if c in source_df.columns]
     template = source_df[available_cols].copy()
 
@@ -362,7 +364,11 @@ def build_batch_template_df(source_df):
         if col not in template.columns:
             template[col] = 0
 
-    return template[['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS]
+    for col in reference_cols:
+        if col not in template.columns:
+            template[col] = 0
+
+    return template[base_cols + reference_cols + EDITABLE_COLS]
 
 
 def dataframe_to_excel_bytes(df):
@@ -817,9 +823,9 @@ if selected_sort_col != 'Original':
 
 # ===== batch download / upload =====
 with st.expander('Batch Download / Upload', expanded=False):
-    st.caption('Download the current editable table, edit only 柜量 / 常规价 / 促销价 / 大促价 / 常规% / 促销% / 大促%, then upload it back. Changes are saved into data/overall_state.json.')
+    st.caption('Download the current table including NETNET / 到库成本 / 变动费用 for reference. Edit only 柜量 / 常规价 / 促销价 / 大促价 / 常规% / 促销% / 大促%, then upload it back. Changes are saved into data/overall_state.json.')
 
-    template_df = build_batch_template_df(filtered_source_df)
+    template_df = build_batch_template_df(build_result_table(filtered_source_df, g)[RESULT_COLS].copy())
     c1, c2 = st.columns([1, 2])
 
     with c1:
@@ -847,7 +853,7 @@ with st.expander('Batch Download / Upload', expanded=False):
 
             st.info('Only editable columns will be saved: ' + ', '.join(EDITABLE_COLS))
 
-            preview_cols = [c for c in ['客户型号', '产品线', '品类', '成本月份'] + EDITABLE_COLS if c in upload_df.columns]
+            preview_cols = [c for c in ['客户型号', '产品线', '品类', '成本月份', 'NETNET', '到库成本', '毛利率','净利率','变动费用'] + EDITABLE_COLS if c in upload_df.columns]
             if preview_cols:
                 st.dataframe(upload_df[preview_cols].head(20), use_container_width=True, hide_index=True)
 

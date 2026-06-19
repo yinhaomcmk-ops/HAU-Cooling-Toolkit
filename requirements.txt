@@ -3,3 +3,5 @@ pandas
 openpyxl
 folium
 streamlit-folium
+plotly
+openai
