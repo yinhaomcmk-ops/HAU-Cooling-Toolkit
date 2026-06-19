@@ -847,6 +847,20 @@ def enrich_sales_agent_data(df: pd.DataFrame) -> pd.DataFrame:
 def load_sales_agent_data() -> pd.DataFrame:
     init_all_shared_db()
     raw = read_sales_agent_records()
+
+    # Streamlit Cloud does not keep data/app_data.db as a reliable source.
+    # If the runtime DB is missing/empty, rebuild it directly from the fixed Excel
+    # source files under /data so every module can be opened directly without
+    # visiting Database first.
+    if raw.empty:
+        try:
+            bootstrap_database_from_excel(force=True)
+            raw = read_sales_agent_records()
+        except Exception:
+            # Keep the previous behaviour if bootstrap fails; the page will show
+            # its normal no-data warning instead of crashing.
+            pass
+
     if raw.empty:
         return raw
     return enrich_sales_agent_data(raw)
