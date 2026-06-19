@@ -3,17 +3,6 @@
 .env
 .env.*
 
-# Database
-data/*.db
-
-# Runtime
-data/page_memory.json
-data/*_state.json
-
-# Excel data
-data/*.xlsx
-data/*.xls
-data/*.csv
 
 # Python
 __pycache__/
