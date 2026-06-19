@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import math
 import sqlite3
+import html
 from datetime import datetime
 from pathlib import Path
 
@@ -84,6 +85,8 @@ def init_db():
             """
         )
         ensure_column(conn, "store_locations", "retailer", "TEXT")
+        ensure_column(conn, "store_locations", "business_name_short", "TEXT")
+        ensure_column(conn, "store_locations", "region", "TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales_records(sales_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_store ON sales_records(business_name)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sales_model ON sales_records(model)")
@@ -183,6 +186,8 @@ def normalize_store_df(df_raw: pd.DataFrame) -> pd.DataFrame:
         df,
         {
             "business_name": ["business name", "business_name", "store name", "store", "customer", "customer name"],
+            "business_name_short": ["business name short", "business_name_short", "short", "short name", "store short", "store_short", "short_store_name"],
+            "region": ["region", "state", "area", "territory"],
             "retailer": ["retailer", "channel", "banner", "account", "group"],
             "latitude": ["latitude", "lat", "y"],
             "longitude": ["longitude", "lon", "lng", "long", "x"],
@@ -191,11 +196,17 @@ def normalize_store_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     missing = validate_required_columns(df, ["business_name", "latitude", "longitude"])
     if missing:
         raise ValueError(f"Store location file missing required columns: {missing}")
+    if "business_name_short" not in df.columns:
+        df["business_name_short"] = ""
+    if "region" not in df.columns:
+        df["region"] = ""
     if "retailer" not in df.columns:
         df["retailer"] = "Unknown"
 
-    out = df[["business_name", "retailer", "latitude", "longitude"]].copy()
+    out = df[["business_name", "business_name_short", "region", "retailer", "latitude", "longitude"]].copy()
     out["business_name"] = out["business_name"].apply(clean_business_name)
+    out["business_name_short"] = out["business_name_short"].fillna("").astype(str).str.strip()
+    out["region"] = out["region"].fillna("").astype(str).str.strip()
     out["retailer"] = out["retailer"].apply(clean_retailer)
     out["latitude"] = pd.to_numeric(out["latitude"], errors="coerce")
     out["longitude"] = pd.to_numeric(out["longitude"], errors="coerce")
@@ -245,15 +256,25 @@ def save_store_locations(df: pd.DataFrame, replace_all: bool = False):
         for _, row in to_save.iterrows():
             conn.execute(
                 """
-                INSERT INTO store_locations (business_name, retailer, latitude, longitude, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO store_locations (business_name, business_name_short, region, retailer, latitude, longitude, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(business_name) DO UPDATE SET
+                    business_name_short=excluded.business_name_short,
+                    region=excluded.region,
                     retailer=excluded.retailer,
                     latitude=excluded.latitude,
                     longitude=excluded.longitude,
                     updated_at=excluded.updated_at
                 """,
-                (row["business_name"], row["retailer"], float(row["latitude"]), float(row["longitude"]), row["updated_at"]),
+                (
+                    row["business_name"],
+                    str(row.get("business_name_short", "") or "").strip(),
+                    str(row.get("region", "") or "").strip(),
+                    row["retailer"],
+                    float(row["latitude"]),
+                    float(row["longitude"]),
+                    row["updated_at"],
+                ),
             )
         conn.commit()
 
@@ -273,7 +294,7 @@ def read_store_locations() -> pd.DataFrame:
     init_db()
     with get_conn() as conn:
         return pd.read_sql_query(
-            "SELECT business_name, retailer, latitude, longitude, updated_at FROM store_locations", conn
+            "SELECT business_name, business_name_short, region, retailer, latitude, longitude, updated_at FROM store_locations", conn
         )
 
 
@@ -366,6 +387,10 @@ def prepare_analysis_data(store_df: pd.DataFrame, sales_df: pd.DataFrame):
         store_df.merge(store_sales_summary, on="business_name", how="left")
         .merge(top_model_df, on="business_name", how="left")
     )
+    if "business_name_short" not in merged_df.columns:
+        merged_df["business_name_short"] = ""
+    merged_df["business_name_short"] = merged_df["business_name_short"].fillna("").astype(str).str.strip()
+    merged_df["display_name"] = merged_df["business_name_short"].where(merged_df["business_name_short"] != "", merged_df["business_name"])
     merged_df["retailer"] = merged_df["retailer"].fillna("Unknown")
     merged_df["total_sales"] = merged_df["total_sales"].fillna(0)
     merged_df["model_count"] = merged_df["model_count"].fillna(0).astype(int)
@@ -490,7 +515,7 @@ def _cluster_icon_create_function(q1: float, q2: float, q3: float):
     """
 
 
-def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_map"):
+def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_map", show_point_labels: bool = False):
     if folium is None or st_folium is None:
         st.error("Please install folium and streamlit-folium first: pip install folium streamlit-folium")
         return
@@ -559,13 +584,15 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
         lat = float(row["latitude"])
         lon = float(row["longitude"])
 
+        display_name = str(row.get("display_name", "") or "").strip() or str(row["business_name"])
         popup_html = f"""
         <div style="min-width:240px;">
-            <b>{row['business_name']}</b><br/>
-            Retailer: {row['retailer']}<br/>
+            <b>{html.escape(display_name)}</b><br/>
+            Full Store: {html.escape(str(row['business_name']))}<br/>
+            Retailer: {html.escape(str(row['retailer']))}<br/>
             Sales: {sales:,.0f}<br/>
             Model Count: {int(row['model_count'])}<br/>
-            Top Models: {row['top_models']}
+            Top Models: {html.escape(str(row['top_models']))}
         </div>
         """
 
@@ -596,16 +623,50 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
         else:
             marker_shadow = f"0 0 8px {color}"
 
+        safe_display_name = html.escape(str(row.get("display_name", "") or row["business_name"]))
+        safe_label = f"{safe_display_name}: {sales:,.0f}"
+
+        label_html = ""
+        div_icon_width = icon_size
+        div_icon_height = icon_size
+        if show_point_labels:
+            div_icon_width = 310
+            div_icon_height = 36
+            label_html = f"""
+            <div style="
+                position:absolute;
+                left:24px;
+                top:2px;
+                min-width:120px;
+                max-width:270px;
+                padding:3px 7px;
+                border-radius:8px;
+                background:rgba(6,18,28,0.82);
+                border:1px solid rgba(255,255,255,0.18);
+                color:#F9FAFB;
+                font-size:11px;
+                font-weight:800;
+                line-height:1.25;
+                white-space:nowrap;
+                overflow:hidden;
+                text-overflow:ellipsis;
+                text-shadow:0 1px 2px rgba(0,0,0,0.8);
+                box-shadow:0 2px 10px rgba(0,0,0,0.35);
+                pointer-events:none;
+            ">{safe_label}</div>
+            """
+
         marker_html = f"""
         <div data-sales="{sales}" style="
-            width:{icon_size}px;
-            height:{icon_size}px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
+            position:relative;
+            width:{div_icon_width}px;
+            height:{div_icon_height}px;
             overflow:visible;
         ">
             <div style="
+                position:absolute;
+                left:{icon_anchor - marker_size / 2}px;
+                top:{icon_anchor - marker_size / 2}px;
                 width:{marker_size}px;
                 height:{marker_size}px;
                 border-radius:50%;
@@ -613,17 +674,18 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
                 border:{border_width}px solid {border_color};
                 box-shadow:{marker_shadow};
             "></div>
+            {label_html}
         </div>
         """
 
         folium.Marker(
             location=[lat, lon],
-            tooltip=f"{row['business_name']} | Sales: {sales:,.0f}",
+            tooltip=f"{display_name} | Sales: {sales:,.0f}",
             popup=folium.Popup(popup_html, max_width=320),
             icon=folium.DivIcon(
                 html=marker_html,
                 class_name="sales-neon-marker",
-                icon_size=(icon_size, icon_size),
+                icon_size=(div_icon_width, div_icon_height),
                 icon_anchor=(icon_anchor, icon_anchor),
             ),
             salesValue=sales,
@@ -632,7 +694,7 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
     st_folium(
         fmap,
         use_container_width=True,
-        height=800,
+        height=1000,
         key=map_key,
         returned_objects=[],
     )

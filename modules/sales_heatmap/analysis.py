@@ -132,7 +132,7 @@ def build_sales_heatmap(df_map: pd.DataFrame, map_key: str = "sales_heatmap_dens
             fill=True,
             fill_color="#00E5C4",
             fill_opacity=0.32,
-            tooltip=f"{row['business_name']} | Sales: {row['total_sales']:,.0f}",
+            tooltip=f"{str(row.get('display_name', '') or row['business_name'])} | Sales: {row['total_sales']:,.0f}",
         ).add_to(fmap)
 
     st_folium(
@@ -161,6 +161,10 @@ if sales_df.empty:
 
 sales_df = add_sales_week_columns(sales_df)
 
+if "business_name_short" not in store_df.columns:
+    store_df["business_name_short"] = ""
+if "region" not in store_df.columns:
+    store_df["region"] = ""
 if "retailer" not in store_df.columns:
     store_df["retailer"] = "Unknown"
 
@@ -281,6 +285,12 @@ show_cluster_map = st.sidebar.checkbox(
     key="heatmap_show_cluster_map",
 )
 
+show_point_labels = st.sidebar.checkbox(
+    "Show store name & sales labels",
+    value=False,
+    key="heatmap_show_point_labels",
+)
+
 show_heatmap = st.sidebar.checkbox(
     "Show sales heatmap",
     value=True,
@@ -334,7 +344,7 @@ if not filtered_store_df.empty:
     ].copy()
 
 merged_df, _, sales_without_location_summary = prepare_analysis_data(
-    filtered_store_df[["business_name", "retailer", "latitude", "longitude"]],
+    filtered_store_df[["business_name", "business_name_short", "region", "retailer", "latitude", "longitude"]],
     filtered_sales[["sales_date", "business_name", "model", "sales"]],
 )
 
@@ -354,6 +364,7 @@ with snapshot_left:
 with snapshot_right:
     st.subheader("View Summary")
     st.write(f"**Show zero-sales stores:** {'Yes' if show_zero_sales else 'No'}")
+    st.write(f"**Show store labels:** {'Yes' if show_point_labels else 'No'}")
     st.write(f"**Stores in current view:** {len(merged_df_display):,}")
     st.write(f"**Stores with positive sales:** {(merged_df_display['total_sales'] > 0).sum():,}")
     st.write(f"**Mapped sales volume:** {merged_df_display['total_sales'].sum():,.0f}")
@@ -365,7 +376,11 @@ if show_cluster_map:
         "<div class='small-note'>Cluster values represent selected sales total in each area.</div>",
         unsafe_allow_html=True,
     )
-    build_folium_map(merged_df_display, map_key="cluster_sales_map")
+    build_folium_map(
+        merged_df_display,
+        map_key=f"cluster_sales_map_{int(show_point_labels)}_{len(merged_df_display)}_{int(merged_df_display['total_sales'].sum())}",
+        show_point_labels=show_point_labels,
+    )
 
 if show_heatmap:
     st.markdown("---")

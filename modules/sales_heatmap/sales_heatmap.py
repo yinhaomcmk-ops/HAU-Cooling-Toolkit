@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sqlite3
+import html
 from datetime import datetime
 from pathlib import Path
 
@@ -435,7 +436,7 @@ def add_sales_week_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_map"):
+def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_map", show_point_labels: bool = False):
     if folium is None or st_folium is None:
         st.error("Please install folium and streamlit-folium first: pip install folium streamlit-folium")
         return
@@ -483,32 +484,78 @@ def build_folium_map(df_map: pd.DataFrame, map_key: str = "store_sales_cluster_m
         box_shadow = f"0 0 12px {highlight_color}" if highlight_color else f"0 0 8px {sales_color}"
         highlight_text = highlight_color if highlight_color else "No"
 
+        business_name = html.escape(str(row["business_name"]))
+        retailer = html.escape(str(row["retailer"]))
+        top_models = html.escape(str(row["top_models"]))
+        highlight_text_safe = html.escape(str(highlight_text))
+
         popup_html = f"""
         <div style="min-width:240px;">
-            <b>{row['business_name']}</b><br/>
-            Retailer: {row['retailer']}<br/>
+            <b>{business_name}</b><br/>
+            Retailer: {retailer}<br/>
             Sales: {sales:,.0f}<br/>
             Model Count: {int(row['model_count'])}<br/>
-            Highlight: {highlight_text}<br/>
-            Top Models: {row['top_models']}
+            Highlight: {highlight_text_safe}<br/>
+            Top Models: {top_models}
         </div>
         """
+
+        label_html = ""
+        icon_width = 28
+        icon_height = 28
+        if show_point_labels:
+            label_html = f"""
+            <div style="
+                position:absolute;
+                left:22px;
+                top:-2px;
+                min-width:150px;
+                max-width:260px;
+                padding:3px 7px;
+                border-radius:8px;
+                background:rgba(6, 18, 28, 0.78);
+                border:1px solid rgba(255,255,255,0.18);
+                color:#F9FAFB;
+                font-size:11px;
+                font-weight:700;
+                line-height:1.25;
+                white-space:nowrap;
+                overflow:hidden;
+                text-overflow:ellipsis;
+                text-shadow:0 1px 2px rgba(0,0,0,0.75);
+                box-shadow:0 2px 10px rgba(0,0,0,0.35);
+                pointer-events:none;
+            ">{business_name}: {sales:,.0f}</div>
+            """
+            icon_width = 300
+            icon_height = 36
+
         marker_html = f"""
-        <div style="
-            width:16px;
-            height:16px;
-            border-radius:50%;
-            background:{sales_color};
-            border:{border_width}px solid {border_color};
-            box-shadow:{box_shadow};
-            box-sizing:border-box;
-        "></div>
+        <div style="position:relative; width:{icon_width}px; height:{icon_height}px;">
+            <div style="
+                position:absolute;
+                left:0;
+                top:0;
+                width:16px;
+                height:16px;
+                border-radius:50%;
+                background:{sales_color};
+                border:{border_width}px solid {border_color};
+                box-shadow:{box_shadow};
+                box-sizing:border-box;
+            "></div>
+            {label_html}
+        </div>
         """
         folium.Marker(
             location=[float(row["latitude"]), float(row["longitude"] )],
             tooltip=f"{row['business_name']} | Sales: {sales:,.0f}" + (f" | Highlight: {highlight_color}" if highlight_color else ""),
             popup=folium.Popup(popup_html, max_width=320),
-            icon=folium.DivIcon(html=marker_html),
+            icon=folium.DivIcon(
+                html=marker_html,
+                icon_size=(icon_width, icon_height),
+                icon_anchor=(8, 8),
+            ),
         ).add_to(cluster)
 
     st_folium(
@@ -683,6 +730,7 @@ with st.sidebar:
 
     selected_retailers = st.multiselect("Retailer", options=all_retailers, default=[])
     show_zero_sales = st.checkbox("Show stores with zero sales", value=True)
+    show_point_labels = st.checkbox("Show store name & sales labels", value=False)
     selected_model = st.selectbox("Model", ["All Models"] + all_models)
     top_n_table = st.slider("Top N stores", 10, 100, 20, 5)
 
@@ -747,11 +795,12 @@ map_key = (
     f"{selected_model}_"
     f"{'|'.join(selected_retailers) if selected_retailers else 'all'}_"
     f"{int(show_zero_sales)}_"
+    f"{int(show_point_labels)}_"
     f"{int(round(float(filtered_sales['sales'].sum()), 0))}_"
     f"{len(merged_df_display)}_"
     f"{int((merged_df_display['highlight_color'] != '').sum())}"
 )
-build_folium_map(merged_df_display, map_key=map_key)
+build_folium_map(merged_df_display, map_key=map_key, show_point_labels=show_point_labels)
 
 st.markdown("---")
 left, right = st.columns([1.2, 1])
@@ -770,6 +819,7 @@ with right:
     st.write(f"**Retailer:** {', '.join(selected_retailers) if selected_retailers else 'All Retailers'}")
     st.write(f"**Model:** {selected_model}")
     st.write(f"**Show zero-sales stores:** {'Yes' if show_zero_sales else 'No'}")
+    st.write(f"**Show store labels:** {'Yes' if show_point_labels else 'No'}")
     st.write(f"**Matched stores in view:** {len(merged_df_display):,}")
     st.write(f"**Highlighted stores in view:** {int((merged_df_display['highlight_color'] != '').sum()):,}")
     st.write(f"**Unmatched sales stores:** {len(sales_without_location_summary):,}")

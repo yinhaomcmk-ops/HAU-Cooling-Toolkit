@@ -124,12 +124,23 @@ if df.empty:
     st.stop()
 
 st.sidebar.header('Global Parameters')
-fx_aud_to_cny = st.sidebar.number_input('1 AUD = CNY', min_value=0.0001, value=safe_float(g['fx_aud_to_cny']), format='%.4f')
-aud_to_usd = st.sidebar.number_input('1 AUD = USD', min_value=0.0001, value=safe_float(g['aud_to_usd']), format='%.4f')
-sea_freight_usd = st.sidebar.number_input('Sea Freight / 40HQ (USD)', min_value=0.0, value=safe_float(g['sea_freight_usd']), format='%.0f')
-clearance_aud = st.sidebar.number_input('Custom Clearance & Cartage (AUD)', min_value=0.0, value=safe_float(g['clearance_aud']), format='%.0f')
-insurance_pct = st.sidebar.number_input('Insurance (%)', min_value=0.0, value=rate_to_pct(g['insurance_rate']), format='%.1f', step=0.1)
-singa_upcost_pct = st.sidebar.number_input('Singa Upcost (%)', min_value=0.0, value=rate_to_pct(g['singa_upcost_rate']), format='%.1f', step=0.1)
+for _key, _default in {
+    'special_global_fx_aud_to_cny': safe_float(g['fx_aud_to_cny']),
+    'special_global_aud_to_usd': safe_float(g['aud_to_usd']),
+    'special_global_sea_freight_usd': safe_float(g['sea_freight_usd']),
+    'special_global_clearance_aud': safe_float(g['clearance_aud']),
+    'special_global_insurance_pct': rate_to_pct(g['insurance_rate']),
+    'special_global_singa_upcost_pct': rate_to_pct(g['singa_upcost_rate']),
+}.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
+
+fx_aud_to_cny = st.sidebar.number_input('1 AUD = CNY', min_value=0.0001, format='%.2f', key='special_global_fx_aud_to_cny')
+aud_to_usd = st.sidebar.number_input('1 AUD = USD', min_value=0.0001, format='%.2f', key='special_global_aud_to_usd')
+sea_freight_usd = st.sidebar.number_input('Sea Freight / 40HQ (USD)', min_value=0.0, format='%.0f', key='special_global_sea_freight_usd')
+clearance_aud = st.sidebar.number_input('Custom Clearance & Cartage (AUD)', min_value=0.0, format='%.0f', key='special_global_clearance_aud')
+insurance_pct = st.sidebar.number_input('Insurance (%)', min_value=0.0, format='%.1f', step=0.1, key='special_global_insurance_pct')
+singa_upcost_pct = st.sidebar.number_input('Singa Upcost (%)', min_value=0.0, format='%.1f', step=0.1, key='special_global_singa_upcost_pct')
 
 save_global_params({
     **g,
@@ -184,23 +195,43 @@ selected_row = filtered.iloc[0]
 model_key = str(selected_row['model_id'])
 overrides = state.get('model_overrides', {}).get(model_key, {})
 
+
+def init_number_state(key, default_value):
+    # Only seed the widget once. After that, Streamlit owns the current value.
+    if key not in st.session_state:
+        st.session_state[key] = default_value
+
+
+def widget_key(field):
+    return f'special_{field}_{model_key}'
+
+
+init_number_state(widget_key('selling_price'), safe_float(overrides.get('selling_price', g['selling_price'])))
+init_number_state(
+    widget_key('loading_qty'),
+    max(1, safe_int(overrides.get('loading_qty', selected_row.get('default_loading_qty', g['loading_qty'])), g['loading_qty']))
+)
+init_number_state(widget_key('contractual_rebate_pct'), safe_float(overrides.get('contractual_rebate_pct', g['contractual_rebate_pct'])))
+init_number_state(widget_key('other_rebate_pct'), safe_float(overrides.get('other_rebate_pct', g['other_rebate_pct'])))
+init_number_state(widget_key('other_disc_value'), safe_float(overrides.get('other_disc_value', g['other_disc_value'])))
+
 r1, r2, r3, r4 = st.columns(4)
 with r1:
-    selling_price = st.number_input('Selling Price', min_value=0.0, value=safe_float(overrides.get('selling_price', g['selling_price'])), format='%.2f')
+    selling_price = st.number_input('Selling Price', min_value=0.0, format='%.0f', key=widget_key('selling_price'))
 with r2:
-    loading_qty = st.number_input('Loading Qty / 40HQ', min_value=1, value=max(1, safe_int(overrides.get('loading_qty', selected_row.get('default_loading_qty', g['loading_qty'])), g['loading_qty'])), step=1)
+    loading_qty = st.number_input('Loading Qty / 40HQ', min_value=1, step=1, key=widget_key('loading_qty'))
 with r3:
-    expense_rate = st.number_input('Expense Rate', min_value=0.0, value=safe_float(selected_row.get('expense_rate')), format='%.4f', disabled=True)
+    expense_rate = st.number_input('Expense Rate', min_value=0.0, value=safe_float(selected_row.get('expense_rate')), format='%.4f', disabled=True, key=widget_key('expense_rate'))
 with r4:
-    hq_upcost_pct = st.number_input('HQ Up Cost (%)', min_value=0.0, value=rate_to_pct(selected_row.get('hq_upcost_rate')), format='%.2f', disabled=True)
+    hq_upcost_pct = st.number_input('HQ Up Cost (%)', min_value=0.0, value=rate_to_pct(selected_row.get('hq_upcost_rate')), format='%.2f', disabled=True, key=widget_key('hq_upcost_rate'))
 
 r5, r6, r7 = st.columns(3)
 with r5:
-    contractual_rebate_pct = st.number_input('Contractual Rebate (%)', min_value=0.0, max_value=100.0, value=safe_float(overrides.get('contractual_rebate_pct', g['contractual_rebate_pct'])), format='%.1f')
+    contractual_rebate_pct = st.number_input('Contractual Rebate (%)', min_value=0.0, max_value=100.0, format='%.1f', key=widget_key('contractual_rebate_pct'))
 with r6:
-    other_rebate_pct = st.number_input('Other Rebate (%)', min_value=0.0, max_value=100.0, value=safe_float(overrides.get('other_rebate_pct', g['other_rebate_pct'])), format='%.1f')
+    other_rebate_pct = st.number_input('Other Rebate (%)', min_value=0.0, max_value=100.0, format='%.1f', key=widget_key('other_rebate_pct'))
 with r7:
-    other_disc_value = st.number_input('Other Disc / Incentive ($)', value=safe_float(overrides.get('other_disc_value', g['other_disc_value'])), format='%.2f', step=10.0)
+    other_disc_value = st.number_input('Other Disc / Incentive ($)', format='%.0f', step=10.0, key=widget_key('other_disc_value'))
 
 metrics = calc_metrics(
     exw_cost_cny=safe_float(selected_row.get('exw_cost')),
@@ -230,45 +261,88 @@ state.setdefault('model_overrides', {})[model_key] = {
 }
 save_state(state)
 
-st.subheader('Result')
-result_df = pd.DataFrame([{
-    '客户型号': model_key, 
-    '产品线': safe_text(selected_row.get('product_line'), '-'), 
-    '品类': safe_text(selected_row.get('category'), '-'), 
-    '成本月份': safe_text(selected_row.get('成本月份'), '-'),
-    '毛利率%': metrics['Gross Margin'], 
-    '净利率%': metrics['Net Margin'],
-    '售价(AUD)': selling_price, 
-    '开票价': metrics['Invoice Price'], 
-    'NETNET': metrics['HA Net Net Price'], 
-    '到库成本': metrics['到库成本'],
-    '变动费用': metrics['Variable Cost'], 
-    '合计成本': metrics['Total Cost'], 
-    'EXW(CNY)': metrics['EXW CNY'],
-    'FOB(AUD)': metrics['FOB(AUD)'], 
-    '海运/台': metrics['海运/台'], 
-    '清关/台': metrics['清关/台'], 
-    '保险': metrics['保险'], 
+st.subheader('Result (Simulation by Contractual Rebate)')
 
+base_rebate_options = [30.0, 32.0, 35.0, 38.0]
+current_rebate = round(float(contractual_rebate_pct), 1)
 
-}])
-st.dataframe(result_df, use_container_width=True, hide_index=True, column_config={
-    '柜量': st.column_config.NumberColumn('柜量', format='%d'), 
-    '售价(AUD)': st.column_config.NumberColumn('售价(AUD)', format='%.0f'), 
-    '开票价': st.column_config.NumberColumn('开票价', format='%.0f'), 
-    'NETNET': st.column_config.NumberColumn('NETNET', format='%.0f'), 
-    'EXW(CNY)': st.column_config.NumberColumn('EXW(CNY)', format='%.0f'),
-    'FOB(AUD)': st.column_config.NumberColumn('FOB(AUD)', format='%.0f'),
-    '毛利率%': st.column_config.NumberColumn('毛利率%', format='%.1f%%'), 
-    '净利率%': st.column_config.NumberColumn('净利率%', format='%.1f%%'),
-    '海运/台': st.column_config.NumberColumn('海运/台', format='%.0f'), 
-    '清关/台': st.column_config.NumberColumn('清关/台', format='%.0f'), 
-    '保险': st.column_config.NumberColumn('保险', format='%.2f'), 
-    '到库成本': st.column_config.NumberColumn('到库成本', format='%.0f'), 
-    '变动费用': st.column_config.NumberColumn('变动费用', format='%.0f'), 
-    '合计成本': st.column_config.NumberColumn('合计成本', format='%.0f'), 
+simulation_rebates = []
+for rb in base_rebate_options + [current_rebate]:
+    rb = round(float(rb), 1)
+    if not any(abs(rb - existing) < 0.0001 for existing in simulation_rebates):
+        simulation_rebates.append(rb)
+simulation_rebates = sorted(simulation_rebates)
 
-})
+result_rows = []
+for sim_rebate in simulation_rebates:
+    sim_metrics = calc_metrics(
+        exw_cost_cny=safe_float(selected_row.get('exw_cost')),
+        selling_price=selling_price,
+        loading_qty=loading_qty,
+        fx_aud_to_cny=safe_float(g['fx_aud_to_cny']),
+        aud_to_usd=safe_float(g['aud_to_usd']),
+        sea_freight_usd=safe_float(g['sea_freight_usd']),
+        clearance_aud=safe_float(g['clearance_aud']),
+        insurance_rate=safe_float(g['insurance_rate']),
+        hq_upcost_rate=safe_float(selected_row.get('hq_upcost_rate')),
+        singa_upcost_rate=safe_float(g['singa_upcost_rate']),
+        expense_rate=expense_rate,
+        contractual_rebate_pct=sim_rebate,
+        other_rebate_pct=other_rebate_pct,
+        other_disc_value=other_disc_value,
+    )
+
+    is_current = abs(sim_rebate - current_rebate) < 0.0001
+    result_rows.append({
+        'Contractual Rebate (%)': f"{sim_rebate:.1f}% (Current)" if is_current else f"{sim_rebate:.1f}%",
+        '客户型号': model_key,
+        '产品线': safe_text(selected_row.get('product_line'), '-'),
+        '品类': safe_text(selected_row.get('category'), '-'),
+        '成本月份': safe_text(selected_row.get('成本月份'), '-'),
+        '毛利率%': sim_metrics['Gross Margin'],
+        '净利率%': sim_metrics['Net Margin'],
+        '售价(AUD)': selling_price,
+        '开票价': sim_metrics['Invoice Price'],
+        'NETNET': sim_metrics['HA Net Net Price'],
+        '到库成本': sim_metrics['到库成本'],
+        '变动费用': sim_metrics['Variable Cost'],
+        '合计成本': sim_metrics['Total Cost'],
+        'EXW(CNY)': sim_metrics['EXW CNY'],
+        'FOB(AUD)': sim_metrics['FOB(AUD)'],
+        '海运/台': sim_metrics['海运/台'],
+        '清关/台': sim_metrics['清关/台'],
+        '保险': sim_metrics['保险'],
+    })
+
+result_df = pd.DataFrame(result_rows)
+
+def highlight_current_rebate(row):
+    if 'Current' in str(row.get('Contractual Rebate (%)', '')):
+        return ['background-color: #0f5c53; color: white; font-weight: 700;'] * len(row)
+    return [''] * len(row)
+
+st.dataframe(
+    result_df.style.apply(highlight_current_rebate, axis=1),
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        'Contractual Rebate (%)': st.column_config.TextColumn('Contractual Rebate (%)'),
+        '柜量': st.column_config.NumberColumn('柜量', format='%d'),
+        '售价(AUD)': st.column_config.NumberColumn('售价(AUD)', format='%.0f'),
+        '开票价': st.column_config.NumberColumn('开票价', format='%.0f'),
+        'NETNET': st.column_config.NumberColumn('NETNET', format='%.0f'),
+        'EXW(CNY)': st.column_config.NumberColumn('EXW(CNY)', format='%.0f'),
+        'FOB(AUD)': st.column_config.NumberColumn('FOB(AUD)', format='%.0f'),
+        '毛利率%': st.column_config.NumberColumn('毛利率%', format='%.1f%%'),
+        '净利率%': st.column_config.NumberColumn('净利率%', format='%.1f%%'),
+        '海运/台': st.column_config.NumberColumn('海运/台', format='%.0f'),
+        '清关/台': st.column_config.NumberColumn('清关/台', format='%.0f'),
+        '保险': st.column_config.NumberColumn('保险', format='%.2f'),
+        '到库成本': st.column_config.NumberColumn('到库成本', format='%.0f'),
+        '变动费用': st.column_config.NumberColumn('变动费用', format='%.0f'),
+        '合计成本': st.column_config.NumberColumn('合计成本', format='%.0f'),
+    },
+)
 m1, m2, m3 = st.columns(3)
 m1.metric('Invoice Price', f"{metrics['Invoice Price']:.2f}")
 m2.metric('Gross Margin', f"{metrics['Gross Margin']:.1f}%")
