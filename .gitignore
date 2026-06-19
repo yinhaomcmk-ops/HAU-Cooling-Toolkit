@@ -3,11 +3,5 @@
 .env
 .env.*
 
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-
 # VSCode
 .vscode/
