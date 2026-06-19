@@ -885,7 +885,7 @@ SOURCE_FILES = {
     "landed_cost": "landed_cost.xlsx",
     "store_master": "store_master.xlsx",
     "highlight_store": "highlight_store.xlsx",
-    "sales_by_stores": "sales_by_stores.xlsx",
+    "sales_by_stores": "sales_summary_store.xlsx",
     "sales_agent": "sales_agent.xlsx",
 }
 

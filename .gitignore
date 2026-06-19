@@ -1,7 +1,10 @@
-# Secrets
 .streamlit/secrets.toml
 .env
 .env.*
 
-# VSCode
+data/app_data.db
+data/page_memory.json
+
+__pycache__/
+*.pyc
 .vscode/
