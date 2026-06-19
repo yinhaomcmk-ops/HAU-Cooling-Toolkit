@@ -3,9 +3,6 @@
 .env
 .env.*
 
-# Runtime cache only
-data/app_data.db
-data/page_memory.json
 
 # Python
 __pycache__/
