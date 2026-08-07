@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import io
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -119,7 +121,7 @@ def show_upload_result(saved: int | None = None, ignored: int | None = None, act
 def render_clear_button(label: str, clear_func, key: str):
     with st.expander("Danger zone", expanded=False):
         st.warning("This action cannot be undone.")
-        if st.button(label, key=key, use_container_width=True):
+        if st.button(label, key=key, width="stretch"):
             clear_func()
             st.success("Cleared.")
             st.rerun()
@@ -129,14 +131,121 @@ def render_clear_button(label: str, clear_func, key: str):
 # Cost file helpers
 # -----------------------------
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-COST_DATA_DIR = PROJECT_ROOT / "data"
-PRODUCT_MASTER_FILE = COST_DATA_DIR / "product_model_master.xlsx"
-EXW_COST_FILE = COST_DATA_DIR / "exw_cost.xlsx"
-LANDED_COST_FILE = COST_DATA_DIR / "landed_cost.xlsx"
-STORE_MASTER_FILE = COST_DATA_DIR / "store_master.xlsx"
-HIGHLIGHT_STORE_FILE = COST_DATA_DIR / "highlight_store.xlsx"
-SALES_BY_STORES_FILE = COST_DATA_DIR / "sales_summary_store.xlsx"
-SALES_AGENT_FILE = COST_DATA_DIR / "sales_agent.xlsx"
+EXTERNAL_DATABASE_DIR = Path(r"C:\Users\yinhao.chen\OneDrive - Hisense\Documents - YinhaoChen\Database")
+PRODUCT_MASTER_FILE = EXTERNAL_DATABASE_DIR / "Product Master" / "product_model_master.xlsx"
+EXW_COST_FILE = EXTERNAL_DATABASE_DIR / "Cost" / "exw_cost.xlsx"
+LANDED_COST_FILE = EXTERNAL_DATABASE_DIR / "Cost" / "landed_cost.xlsx"
+STORE_MASTER_FILE = EXTERNAL_DATABASE_DIR / "Store" / "store_master.xlsx"
+HIGHLIGHT_STORE_FILE = EXTERNAL_DATABASE_DIR / "Store" / "highlight_store.xlsx"
+SALES_BY_STORES_FILE = EXTERNAL_DATABASE_DIR / "Sellout" / "sales_summary_store.xlsx"
+SALES_AGENT_FILE = EXTERNAL_DATABASE_DIR / "Sellout" / "Sellout vs Price.xlsx"
+
+
+def _rel_or_abs(path: Path) -> str:
+    try:
+        return str(path.relative_to(PROJECT_ROOT))
+    except Exception:
+        return str(path)
+
+
+def _copy_database_with_backup(src: Path, dst: Path, retries: int = 8, delay: float = 0.8) -> None:
+    """Copy a completed temporary SQLite DB into the live DB safely.
+
+    Replacing ``app_data.db`` with ``os.replace`` is unreliable on Windows while
+    Streamlit has recently opened the database. SQLite's backup API updates the
+    live database through normal database connections, so it works with WAL and
+    avoids WinError 2/32 file replacement failures.
+    """
+    if not src.exists():
+        raise FileNotFoundError(f"Temporary database was not created: {src}")
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    last_exc = None
+    for i in range(retries):
+        try:
+            gc.collect()
+            with sqlite3.connect(str(src), timeout=30) as source_conn:
+                with sqlite3.connect(str(dst), timeout=30) as target_conn:
+                    target_conn.execute("PRAGMA busy_timeout=30000")
+                    source_conn.backup(target_conn)
+                    target_conn.commit()
+                    target_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return
+        except sqlite3.OperationalError as exc:
+            last_exc = exc
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            time.sleep(delay * (i + 1))
+    raise last_exc
+
+
+def _refresh_db_from_external_excel() -> list[str]:
+    """Build a separate SQLite DB, validate it, then copy it into the live DB."""
+    from scripts.build_database import build_database
+
+    db_path = Path(DB_PATH)
+    # Put the temporary build outside the live filename. The build script now
+    # correctly redirects all loader helpers to this path.
+    tmp_db = db_path.with_name(f"{db_path.stem}_refresh_tmp_{os.getpid()}_{int(time.time())}{db_path.suffix}")
+    try:
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(str(tmp_db) + suffix)
+            if candidate.exists():
+                candidate.unlink()
+
+        logs = build_database(EXTERNAL_DATABASE_DIR, tmp_db, verbose=False)
+
+        if not tmp_db.exists() or tmp_db.stat().st_size == 0:
+            raise RuntimeError("Temporary database build did not produce a valid SQLite file.")
+        with sqlite3.connect(str(tmp_db), timeout=30) as check_conn:
+            result = check_conn.execute("PRAGMA integrity_check").fetchone()
+            if not result or str(result[0]).lower() != "ok":
+                raise RuntimeError(f"Temporary database integrity check failed: {result}")
+
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+
+        _copy_database_with_backup(tmp_db, db_path)
+        return logs
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(str(tmp_db) + suffix)
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+            except Exception:
+                pass
+
+
+def _render_external_refresh_panel() -> None:
+    """Local-only manual refresh from external Excel files into SQLite."""
+    with st.sidebar:
+        st.markdown("### Source Refresh")
+        if EXTERNAL_DATABASE_DIR.exists():
+            st.caption(f"Local source detected:\n`{EXTERNAL_DATABASE_DIR}`")
+            if st.button("Refresh DB from Excel", width="stretch", key="refresh_db_from_external_excel"):
+                try:
+                    with st.spinner("Reading Excel files and rebuilding SQLite database..."):
+                        logs = _refresh_db_from_external_excel()
+                    st.session_state["db_refresh_logs"] = logs
+                    st.session_state["db_refresh_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.success("Database refreshed from Excel.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Refresh failed: {exc}")
+                    st.info(
+                        "If this keeps happening, close other Streamlit tabs/processes and pause OneDrive sync for this project folder, "
+                        "then click Refresh again."
+                    )
+        else:
+            st.caption("External Excel source folder not found. Online mode will use SQLite only.")
+
+    if "db_refresh_time" in st.session_state:
+        st.info(f"Last DB refresh: {st.session_state['db_refresh_time']}")
+        with st.expander("Refresh log", expanded=False):
+            st.code("\n".join(st.session_state.get("db_refresh_logs", [])) or "No log.")
 
 
 STORE_MASTER_COLUMNS = ["business_name", "business_name_short", "region", "retailer", "latitude", "longitude"]
@@ -255,30 +364,13 @@ def _read_cost_source_file(path: Path) -> pd.DataFrame:
 
 
 def _write_cost_source_file(df: pd.DataFrame, path: Path, sheet_name: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    out = df.copy()
-    if "cost_month" in out.columns:
-        out["cost_month"] = out["cost_month"].astype(str).str[:10]
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        out.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+    # DB-only mode: edits are saved to SQLite. Source Excel files live outside the website package.
+    return None
 
 
 def _auto_sync_cost_from_files() -> None:
-    """Load fixed cost source files from /data into SQLite on app start."""
-    synced = []
-    try:
-        if EXW_COST_FILE.exists():
-            exw_df = normalize_exw_cost_df(_read_cost_source_file(EXW_COST_FILE))
-            save_exw_cost_records(exw_df, replace_all=True)
-            synced.append(f"EXW: {len(exw_df):,}")
-        if LANDED_COST_FILE.exists():
-            landed_df = normalize_landed_cost_df(_read_cost_source_file(LANDED_COST_FILE))
-            save_landed_cost_records(landed_df, replace_all=True)
-            synced.append(f"Landed: {len(landed_df):,}")
-        if synced:
-            st.session_state["cost_file_sync_message"] = " | ".join(synced)
-    except Exception as exc:
-        st.session_state["cost_file_sync_error"] = str(exc)
+    # DB-only mode: do not read Excel on page load. Use scripts/build_database.py locally to refresh SQLite.
+    return None
 
 
 def _normalise_cost_key(df: pd.DataFrame) -> pd.DataFrame:
@@ -351,7 +443,7 @@ def _render_single_cost_form(cost_type: str, columns: list[str], cost_col: str, 
         with c4:
             cost_month = st.text_input("Cost Month", value=datetime.now().strftime("%Y-%m"), key=f"{key_prefix}_single_month").strip()
 
-        if st.button(f"Save One {cost_type} Cost", use_container_width=True, key=f"{key_prefix}_save_single"):
+        if st.button(f"Save One {cost_type} Cost", width="stretch", key=f"{key_prefix}_save_single"):
             row = pd.DataFrame([{ "model_id": model, cost_col: cost, "currency": currency, "cost_month": cost_month }])
             new_all = _merge_cost_rows(current, row, columns, cost_col)
             saved, ignored = save_func(new_all, replace_all=True)
@@ -363,14 +455,14 @@ def _render_single_cost_form(cost_type: str, columns: list[str], cost_col: str, 
 def _render_cost_tab(cost_type: str, current: pd.DataFrame, columns: list[str], cost_col: str, save_func, clear_func, source_path: Path, sheet_name: str, key_prefix: str):
     download_df = ensure_download_df(current, columns)
 
-    src_msg = str(source_path.relative_to(PROJECT_ROOT)) if source_path.exists() else f"{source_path.relative_to(PROJECT_ROOT)} not found"
-    st.caption(f"Source file: `{src_msg}`")
+    src_msg = str(_rel_or_abs(source_path)) if source_path.exists() else f"{_rel_or_abs(source_path)} not found"
+    st.caption(f"External source file: `{src_msg}`")
     st.download_button(
         f"Download Current {cost_type} Cost",
         data=to_excel_bytes(download_df, f"{cost_type} Cost"),
         file_name=f"{key_prefix}_cost_current.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
         key=f"{key_prefix}_download",
     )
 
@@ -384,14 +476,14 @@ def _render_cost_tab(cost_type: str, current: pd.DataFrame, columns: list[str], 
 
     edited = st.data_editor(
         editor_source,
-        use_container_width=True,
+        width="stretch",
         num_rows="dynamic",
         height=500,
         hide_index=True,
         key=f"{key_prefix}_editor",
     )
 
-    if st.button(f"Save Edited {cost_type} Cost", use_container_width=True, key=f"{key_prefix}_save_editor"):
+    if st.button(f"Save Edited {cost_type} Cost", width="stretch", key=f"{key_prefix}_save_editor"):
         new_all = _merge_cost_rows(download_df, edited, columns, cost_col)
         saved, ignored = save_func(new_all, replace_all=True)
         _write_cost_source_file(new_all, source_path, sheet_name)
@@ -417,41 +509,13 @@ def _read_source_file(path: Path) -> pd.DataFrame:
 
 
 def _write_source_file(df: pd.DataFrame, path: Path, sheet_name: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    out = df.copy()
-    for c in ["sales_date", "cost_month"]:
-        if c in out.columns:
-            out[c] = out[c].astype(str).str[:10]
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        out.to_excel(writer, index=False, sheet_name=sheet_name[:31])
+    # DB-only mode: edits are saved to SQLite. Source Excel files live outside the website package.
+    return None
 
 
 def _auto_sync_store_sales_from_files() -> None:
-    """Load fixed source files under /data into SQLite once per session."""
-    synced = []
-    errors = []
-    jobs = [
-        (STORE_MASTER_FILE, _normalise_store_master_with_short, save_store_master_records_with_short, "Store Master"),
-        (HIGHLIGHT_STORE_FILE, normalize_highlight_store_df, save_highlight_store_records, "Highlight Store"),
-        (SALES_BY_STORES_FILE, normalize_sales_by_stores_df, save_sales_by_stores_records, "Sales by Stores"),
-        (SALES_AGENT_FILE, normalize_sales_agent_df, save_sales_agent_records, "Sales Agent"),
-    ]
-    for path, normalizer, saver, label in jobs:
-        try:
-            if path.exists():
-                df = normalizer(_read_source_file(path))
-                result = saver(df, replace_all=True)
-                if isinstance(result, tuple):
-                    saved, ignored = result
-                    synced.append(f"{label}: {saved:,} saved, {ignored:,} ignored")
-                else:
-                    synced.append(f"{label}: {len(df):,}")
-        except Exception as exc:
-            errors.append(f"{label}: {exc}")
-    if synced:
-        st.session_state["store_sales_file_sync_message"] = " | ".join(synced)
-    if errors:
-        st.session_state["store_sales_file_sync_error"] = " | ".join(errors)
+    # DB-only mode: do not read Excel on page load. Use scripts/build_database.py locally to refresh SQLite.
+    return None
 
 
 def _norm_text_col(df: pd.DataFrame, col: str, upper: bool = False) -> pd.DataFrame:
@@ -595,18 +659,18 @@ def _render_store_master_tab():
     columns = STORE_MASTER_COLUMNS
     current = read_store_master_records_with_short()
     download_df = ensure_download_df(current, columns)
-    st.caption(f"Source file: `{STORE_MASTER_FILE.relative_to(PROJECT_ROOT)}`" if STORE_MASTER_FILE.exists() else f"Source file: `{STORE_MASTER_FILE.relative_to(PROJECT_ROOT)}` not found")
-    st.download_button("Download Current Store Master", data=to_excel_bytes(download_df, "Store Master"), file_name="store_master_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="store_master_download")
+    st.caption(f"External source file: `{_rel_or_abs(STORE_MASTER_FILE)}`" if STORE_MASTER_FILE.exists() else f"External source file: `{_rel_or_abs(STORE_MASTER_FILE)}` not found")
+    st.download_button("Download Current Store Master", data=to_excel_bytes(download_df, "Store Master"), file_name="store_master_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="store_master_download")
     st.subheader("Edit Store Master")
     filtered = _filter_store_master_df(download_df, "store_master")
     if filtered.empty:
         filtered = pd.DataFrame([{c: "" for c in columns}])
-    edited = st.data_editor(filtered, use_container_width=True, num_rows="dynamic", height=520, hide_index=True, key="store_master_editor")
-    if st.button("Save Edited Store Master", use_container_width=True, key="save_store_master_editor"):
+    edited = st.data_editor(filtered, width="stretch", num_rows="dynamic", height=520, hide_index=True, key="store_master_editor")
+    if st.button("Save Edited Store Master", width="stretch", key="save_store_master_editor"):
         new_all = _merge_edited_rows(download_df, filtered, edited, columns, ["business_name"])
         save_store_master_records_with_short(new_all, replace_all=True)
         _write_source_file(new_all, STORE_MASTER_FILE, "Store Master")
-        st.success("Store Master updated to database and source file.")
+        st.success("Store Master updated to database.")
         st.rerun()
     render_clear_button("Clear Store Master", clear_store_master_records, "clear_store_master")
 
@@ -615,18 +679,18 @@ def _render_highlight_store_tab():
     columns = ["business_name", "highlight_color"]
     current = read_highlight_store_records()
     download_df = ensure_download_df(current, columns)
-    st.caption(f"Source file: `{HIGHLIGHT_STORE_FILE.relative_to(PROJECT_ROOT)}`" if HIGHLIGHT_STORE_FILE.exists() else f"Source file: `{HIGHLIGHT_STORE_FILE.relative_to(PROJECT_ROOT)}` not found")
-    st.download_button("Download Current Highlight Store", data=to_excel_bytes(download_df, "Highlight Store"), file_name="highlight_store_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="highlight_store_download")
+    st.caption(f"External source file: `{_rel_or_abs(HIGHLIGHT_STORE_FILE)}`" if HIGHLIGHT_STORE_FILE.exists() else f"External source file: `{_rel_or_abs(HIGHLIGHT_STORE_FILE)}` not found")
+    st.download_button("Download Current Highlight Store", data=to_excel_bytes(download_df, "Highlight Store"), file_name="highlight_store_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="highlight_store_download")
     st.subheader("Edit Highlight Store")
     filtered = _filter_highlight_store_df(download_df, "highlight_store")
     if filtered.empty:
         filtered = pd.DataFrame([{c: "" for c in columns}])
-    edited = st.data_editor(filtered, use_container_width=True, num_rows="dynamic", height=520, hide_index=True, key="highlight_store_editor")
-    if st.button("Save Edited Highlight Store", use_container_width=True, key="save_highlight_store_editor"):
+    edited = st.data_editor(filtered, width="stretch", num_rows="dynamic", height=520, hide_index=True, key="highlight_store_editor")
+    if st.button("Save Edited Highlight Store", width="stretch", key="save_highlight_store_editor"):
         new_all = _merge_edited_rows(download_df, filtered, edited, columns, ["business_name"])
         save_highlight_store_records(new_all, replace_all=True)
         _write_source_file(new_all, HIGHLIGHT_STORE_FILE, "Highlight Store")
-        st.success("Highlight Store updated to database and source file.")
+        st.success("Highlight Store updated to database.")
         st.rerun()
     render_clear_button("Clear Highlight Store", clear_highlight_store_records, "clear_highlight_store")
 
@@ -636,15 +700,15 @@ def _render_sales_by_stores_tab():
     current = read_sales_by_stores_records()
     download_df = ensure_download_df(current, columns)
     download_df = _format_date_col(download_df, "sales_date")
-    st.caption(f"Source file: `{SALES_BY_STORES_FILE.relative_to(PROJECT_ROOT)}`" if SALES_BY_STORES_FILE.exists() else f"Source file: `{SALES_BY_STORES_FILE.relative_to(PROJECT_ROOT)}` not found")
-    st.download_button("Download Current Sales by Stores", data=to_excel_bytes(download_df, "Sales by Stores"), file_name="sales_by_stores_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="sales_by_stores_download")
+    st.caption(f"External source file: `{_rel_or_abs(SALES_BY_STORES_FILE)}`" if SALES_BY_STORES_FILE.exists() else f"External source file: `{_rel_or_abs(SALES_BY_STORES_FILE)}` not found")
+    st.download_button("Download Current Sales by Stores", data=to_excel_bytes(download_df, "Sales by Stores"), file_name="sales_by_stores_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sales_by_stores_download")
     st.subheader("Edit Sales by Stores")
     filtered = _filter_sales_df(download_df, "sales_summary_store", read_store_master_records_with_short())
     filtered = _cap_editor_rows(filtered)
     if filtered.empty:
         filtered = pd.DataFrame([{c: "" for c in columns}])
-    edited = st.data_editor(filtered, use_container_width=True, num_rows="dynamic", height=560, hide_index=True, key="sales_by_stores_editor")
-    if st.button("Save Edited Sales by Stores", use_container_width=True, key="save_sales_by_stores_editor"):
+    edited = st.data_editor(filtered, width="stretch", num_rows="dynamic", height=560, hide_index=True, key="sales_by_stores_editor")
+    if st.button("Save Edited Sales by Stores", width="stretch", key="save_sales_by_stores_editor"):
         new_all = _merge_edited_rows(download_df, filtered, edited, columns, ["sales_date", "business_name", "model"])
         saved, ignored = save_sales_by_stores_records(new_all, replace_all=True)
         _write_source_file(new_all, SALES_BY_STORES_FILE, "Sales by Stores")
@@ -658,16 +722,16 @@ def _render_sales_agent_tab():
     current = read_sales_agent_records()
     download_df = ensure_download_df(current, columns)
     download_df = _format_date_col(download_df, "sales_date")
-    st.caption(f"Source file: `{SALES_AGENT_FILE.relative_to(PROJECT_ROOT)}`" if SALES_AGENT_FILE.exists() else f"Source file: `{SALES_AGENT_FILE.relative_to(PROJECT_ROOT)}` not found")
-    st.download_button("Download Current Sales Agent Data", data=to_excel_bytes(download_df, "Sales Agent"), file_name="sales_agent_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, key="sales_agent_download")
+    st.caption(f"External source file: `{_rel_or_abs(SALES_AGENT_FILE)}`" if SALES_AGENT_FILE.exists() else f"External source file: `{_rel_or_abs(SALES_AGENT_FILE)}` not found")
+    st.download_button("Download Current Sales Agent Data", data=to_excel_bytes(download_df, "Sales Agent"), file_name="sales_agent_current.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width="stretch", key="sales_agent_download")
     st.subheader("Edit Sales Agent Data")
     st.caption(f"Rows: {sales_meta['rows']:,} | Date range: {sales_meta['min_date']} → {sales_meta['max_date']}")
     filtered = _filter_sales_df(download_df, "sales_agent")
     filtered = _cap_editor_rows(filtered)
     if filtered.empty:
         filtered = pd.DataFrame([{c: "" for c in columns}])
-    edited = st.data_editor(filtered, use_container_width=True, num_rows="dynamic", height=560, hide_index=True, key="sales_agent_editor")
-    if st.button("Save Edited Sales Agent Data", use_container_width=True, key="save_sales_agent_editor"):
+    edited = st.data_editor(filtered, width="stretch", num_rows="dynamic", height=560, hide_index=True, key="sales_agent_editor")
+    if st.button("Save Edited Sales Agent Data", width="stretch", key="save_sales_agent_editor"):
         new_all = _merge_edited_rows(download_df, filtered, edited, columns, ["sales_date", "channel", "model"])
         saved, ignored = save_sales_agent_records(new_all, replace_all=True)
         _write_source_file(new_all, SALES_AGENT_FILE, "Sales Agent")
@@ -685,19 +749,13 @@ if "store_sales_file_auto_synced" not in st.session_state:
 # Product Master fixed-file helpers
 # -----------------------------
 def _auto_sync_product_from_file() -> None:
-    """Load Product Master from /data/product_model_master.xlsx into SQLite once per session."""
-    try:
-        if PRODUCT_MASTER_FILE.exists():
-            df = normalize_product_master_df(_read_source_file(PRODUCT_MASTER_FILE))
-            save_product_master_records(df, replace_all=True)
-            st.session_state["product_file_sync_message"] = f"Product Master: {len(df):,}"
-    except Exception as exc:
-        st.session_state["product_file_sync_error"] = str(exc)
+    # DB-only mode: do not read Excel on page load. Use scripts/build_database.py locally to refresh SQLite.
+    return None
 
 
 def _normalise_product_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = ensure_download_df(df, ["product_line", "category", "hau_model", "hq_model", "series"]).copy()
-    for col in ["product_line", "category", "hau_model", "hq_model", "series"]:
+    out = ensure_download_df(df, ["status", "year", "product_line", "category", "hau_model", "hq_model", "series"]).copy()
+    for col in ["status", "product_line", "category", "hau_model", "hq_model", "series"]:
         out[col] = out[col].fillna("").astype(str).str.strip()
     out["hau_model"] = out["hau_model"].str.upper()
     return out
@@ -711,6 +769,8 @@ def _filter_product_df(df: pd.DataFrame, key_prefix: str = "product") -> pd.Data
     with c2:
         product_lines = sorted([x for x in filtered["product_line"].dropna().astype(str).unique().tolist() if x])
         product_line_filter = st.selectbox("Product Line", ["All"] + product_lines, key=f"{key_prefix}_line_filter")
+        status_options = sorted([x for x in filtered["status"].dropna().astype(str).unique().tolist() if x]) if "status" in filtered.columns else []
+        status_filter = st.selectbox("Status", ["All"] + status_options, key=f"{key_prefix}_status_filter")
     with c3:
         categories = sorted([x for x in filtered["category"].dropna().astype(str).unique().tolist() if x])
         category_filter = st.selectbox("Category", ["All"] + categories, key=f"{key_prefix}_category_filter")
@@ -722,6 +782,8 @@ def _filter_product_df(df: pd.DataFrame, key_prefix: str = "product") -> pd.Data
         filtered = filtered[filtered["hau_model"].astype(str).str.contains(model_filter.strip(), case=False, na=False)]
     if product_line_filter != "All":
         filtered = filtered[filtered["product_line"].astype(str) == product_line_filter]
+    if 'status_filter' in locals() and status_filter != "All" and "status" in filtered.columns:
+        filtered = filtered[filtered["status"].astype(str) == status_filter]
     if category_filter != "All":
         filtered = filtered[filtered["category"].astype(str) == category_filter]
     if series_filter != "All":
@@ -730,7 +792,7 @@ def _filter_product_df(df: pd.DataFrame, key_prefix: str = "product") -> pd.Data
 
 
 def _merge_product_rows(base: pd.DataFrame, original_filtered: pd.DataFrame, edited: pd.DataFrame) -> pd.DataFrame:
-    columns = ["product_line", "category", "hau_model", "hq_model", "series"]
+    columns = ["status", "year", "product_line", "category", "hau_model", "hq_model", "series"]
     base = _normalise_product_df(base)
     original_filtered = _normalise_product_df(original_filtered)
     edited = _normalise_product_df(edited)
@@ -743,14 +805,18 @@ def _merge_product_rows(base: pd.DataFrame, original_filtered: pd.DataFrame, edi
 
     out = pd.concat([base, edited], ignore_index=True)
     out = out.drop_duplicates(subset=["hau_model"], keep="last")
-    out = out.sort_values(["product_line", "category", "series", "hau_model"]).reset_index(drop=True)
+    out = out.sort_values(["status", "year", "product_line", "category", "series", "hau_model"], na_position="last").reset_index(drop=True)
     return out[columns]
 
 
 def _render_single_product_form(current: pd.DataFrame):
-    columns = ["product_line", "category", "hau_model", "hq_model", "series"]
+    columns = ["status", "year", "product_line", "category", "hau_model", "hq_model", "series"]
     with st.expander("Add / Update One Product", expanded=False):
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1.4, 1.4, 1])
+        c0, c00, c1, c2, c3, c4, c5 = st.columns([0.8, 0.8, 1, 1, 1.4, 1.4, 1])
+        with c0:
+            status = st.selectbox("Status", ["CURRENT", "NEW"], key="product_single_status")
+        with c00:
+            year = st.number_input("Year", min_value=2000, max_value=2100, value=2026, step=1, key="product_single_year")
         with c1:
             product_line = st.text_input("Product Line", key="product_single_line").strip()
         with c2:
@@ -762,11 +828,13 @@ def _render_single_product_form(current: pd.DataFrame):
         with c5:
             series = st.text_input("Series", key="product_single_series").strip()
 
-        if st.button("Save One Product", use_container_width=True, key="product_save_single"):
+        if st.button("Save One Product", width="stretch", key="product_save_single"):
             if not hau_model:
                 st.warning("HAU Model is required.")
                 return
             row = pd.DataFrame([{
+                "status": status,
+                "year": int(year),
                 "product_line": product_line,
                 "category": category,
                 "hau_model": hau_model,
@@ -776,36 +844,31 @@ def _render_single_product_form(current: pd.DataFrame):
             new_all = _merge_product_rows(current, pd.DataFrame(columns=columns), row)
             save_product_master_records(new_all, replace_all=True)
             _write_source_file(new_all, PRODUCT_MASTER_FILE, "Product Master")
-            st.success("Product Master updated to database and source file.")
+            st.success("Product Master updated to database.")
             st.rerun()
 
 
 def _render_product_master_page():
-    columns = ["product_line", "category", "hau_model", "hq_model", "series"]
+    columns = ["status", "year", "product_line", "category", "hau_model", "hq_model", "series"]
     st.header("Product Model Master")
     st.caption(
-        "Product Master is automatically loaded from fixed file under the project data folder. "
-        "Upload is removed. Add/update one product, edit the filtered table, then save to sync both Excel and database."
+        "Product Master is loaded from SQLite for speed. "
+        "When external Excel files are updated locally, use the sidebar Refresh DB from Excel button."
     )
-
-    if "product_file_sync_message" in st.session_state:
-        st.info(f"Auto synced from product file: {st.session_state['product_file_sync_message']}")
-    if "product_file_sync_error" in st.session_state:
-        st.warning(f"Product file auto sync failed: {st.session_state['product_file_sync_error']}")
 
     current = read_product_master_records()
     download_df = ensure_download_df(current, columns)
     st.caption(
-        f"Source file: `{PRODUCT_MASTER_FILE.relative_to(PROJECT_ROOT)}`"
+        f"External source file: `{_rel_or_abs(PRODUCT_MASTER_FILE)}`"
         if PRODUCT_MASTER_FILE.exists()
-        else f"Source file: `{PRODUCT_MASTER_FILE.relative_to(PROJECT_ROOT)}` not found"
+        else f"External source file: `{_rel_or_abs(PRODUCT_MASTER_FILE)}` not found"
     )
     st.download_button(
         "Download Current Product Master",
         data=to_excel_bytes(download_df, "Product Master"),
         file_name="product_model_master_current.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
         key="product_download",
     )
 
@@ -818,18 +881,18 @@ def _render_product_master_page():
 
     edited = st.data_editor(
         filtered,
-        use_container_width=True,
+        width="stretch",
         num_rows="dynamic",
         height=520,
         hide_index=True,
         key="product_editor",
     )
 
-    if st.button("Save Edited Product Master", use_container_width=True, key="product_save_editor"):
+    if st.button("Save Edited Product Master", width="stretch", key="product_save_editor"):
         new_all = _merge_product_rows(download_df, filtered, edited)
         save_product_master_records(new_all, replace_all=True)
         _write_source_file(new_all, PRODUCT_MASTER_FILE, "Product Master")
-        st.success("Product Master updated to database and source file.")
+        st.success("Product Master updated to database.")
         st.rerun()
 
     render_clear_button("Clear Product Master", clear_product_master_records, "clear_product")
@@ -838,6 +901,12 @@ def _render_product_master_page():
 if "product_file_auto_synced" not in st.session_state:
     _auto_sync_product_from_file()
     st.session_state["product_file_auto_synced"] = True
+
+
+# -----------------------------
+# Local source refresh
+# -----------------------------
+_render_external_refresh_panel()
 
 
 # -----------------------------
@@ -871,8 +940,12 @@ with st.sidebar:
         "3. Store DB",
         "4. Sales DB",
     ]
-    selected_menu = st.radio("", menu_options, label_visibility="collapsed", key="database_menu")
-
+    selected_menu = st.radio(
+        "Database Menu",
+        menu_options,
+        label_visibility="collapsed",
+        key="database_menu",
+    )    
 # -----------------------------
 # 1. Product Master
 # -----------------------------
@@ -886,14 +959,9 @@ if selected_menu == "1. Model DB":
 elif selected_menu == "2. Cost DB":
     st.header("Cost Maintenance")
     st.caption(
-        "Cost records are automatically loaded from fixed files under the project data folder. "
-        "You can maintain one cost row, edit the filtered table, download current cost, and save changes back to both Excel and database."
+        "Cost records are loaded from SQLite for speed. "
+        "When external Excel files are updated locally, use the sidebar Refresh DB from Excel button."
     )
-
-    if "cost_file_sync_message" in st.session_state:
-        st.info(f"Auto synced from cost files: {st.session_state['cost_file_sync_message']}")
-    if "cost_file_sync_error" in st.session_state:
-        st.warning(f"Cost file auto sync failed: {st.session_state['cost_file_sync_error']}")
 
     exw_tab, landed_tab = st.tabs(["EXW Cost", "Landed Cost"])
 
@@ -931,13 +999,9 @@ elif selected_menu == "2. Cost DB":
 elif selected_menu == "3. Store DB":
     st.header("Store Data Maintenance")
     st.caption(
-        "Store Master and Highlight Store are maintained from fixed files under the project data folder. "
-        "Upload is removed. Edit the filtered table and save to sync both source file and database."
+        "Store Master and Highlight Store are loaded from SQLite for speed. "
+        "When external Excel files are updated locally, use the sidebar Refresh DB from Excel button."
     )
-    if "store_sales_file_sync_message" in st.session_state:
-        st.info(f"Auto synced from source files: {st.session_state['store_sales_file_sync_message']}")
-    if "store_sales_file_sync_error" in st.session_state:
-        st.warning(f"Source file auto sync failed: {st.session_state['store_sales_file_sync_error']}")
 
     store_tab, highlight_tab = st.tabs(["Store Master", "Highlight Store"])
     with store_tab:
@@ -951,13 +1015,9 @@ elif selected_menu == "3. Store DB":
 elif selected_menu == "4. Sales DB":
     st.header("Sales Data Maintenance")
     st.caption(
-        "Sales by Stores and Sales Agent data are maintained from fixed files under the project data folder. "
-        "Upload is removed. Use filters by model, week, channel and store where available, then edit and save."
+        "Sales by Stores and Sales Agent data are loaded from SQLite for speed. "
+        "When external Excel files are updated locally, use the sidebar Refresh DB from Excel button."
     )
-    if "store_sales_file_sync_message" in st.session_state:
-        st.info(f"Auto synced from source files: {st.session_state['store_sales_file_sync_message']}")
-    if "store_sales_file_sync_error" in st.session_state:
-        st.warning(f"Source file auto sync failed: {st.session_state['store_sales_file_sync_error']}")
 
     sbs_tab, sa_tab = st.tabs(["Sales by Stores", "Sales Agent"])
     with sbs_tab:
@@ -984,12 +1044,12 @@ elif selected_menu == "0. Summary":
                     rows.append({"table": table, "rows": "-", "columns": "-"})
     except Exception as exc:
         st.error(f"Cannot inspect database: {exc}")
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, height=520, hide_index=True)
+    st.dataframe(pd.DataFrame(rows), width="stretch", height=520, hide_index=True)
 
     with st.expander("Clear all shared data", expanded=False):
         st.error("This clears Product Master, Cost, Store Master, Highlight Store, Sales by Stores and Sales Agent data.")
         confirm = st.text_input("Type CLEAR to confirm", key="clear_all_confirm")
-        if st.button("Clear Entire Database", use_container_width=True, key="clear_all"):
+        if st.button("Clear Entire Database", width="stretch", key="clear_all"):
             if confirm == "CLEAR":
                 clear_all_database_records()
                 clear_highlight_store_records()

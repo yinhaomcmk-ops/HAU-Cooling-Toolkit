@@ -3,7 +3,6 @@ import runpy
 import sys
 import streamlit as st
 
-from services.sales_data_loader import bootstrap_database_from_excel
 
 BASE_DIR = Path(__file__).resolve().parent
 ASSET_LOGO = BASE_DIR / "assets" / "hisense_logo.png"
@@ -16,16 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Rebuild shared SQLite database from /data/*.xlsx automatically if app_data.db was deleted.
-# Excel files remain the source of truth; app_data.db is the runtime cache for speed.
-try:
-    _bootstrap_result = bootstrap_database_from_excel(force=False)
-    if _bootstrap_result.get("ran"):
-        st.session_state["db_bootstrap_result"] = _bootstrap_result
-except Exception as exc:
-    st.session_state["db_bootstrap_error"] = str(exc)
-
-
 VALUE_CHAIN_PAGES = {
     "Overall": BASE_DIR / "modules" / "value_chain" / "overall.py",
     "Special": BASE_DIR / "modules" / "value_chain" / "special.py",
@@ -37,13 +26,14 @@ SALES_AGENT_PAGES = {
     "AI Analysis": BASE_DIR / "modules" / "sales_ai" / "page.py",
 }
 DATABASE_PAGE = BASE_DIR / "modules" / "database" / "page.py"
+KPI_PAGE = BASE_DIR / "modules" / "kpi" / "page.py"
 COST_MONITOR_PAGE = BASE_DIR / "modules" / "cost_monitor" / "page.py"
 
-MODULES = ["Value Chain", "Sales Heatmap", "Sales Agent", "Cost Monitor", "Database"]
+MODULES = ["Value Chain", "Sales Heatmap", "Sales Agent", "Cost Monitor", "KPI", "Database"]
 ROLE_PERMISSIONS = {
     "admin": set(MODULES),
-    "KAM": {"Sales Heatmap", "Sales Agent", "Cost Monitor"},
-    "AM": {"Sales Heatmap", "Sales Agent", "Cost Monitor"},
+    "KAM": {"Sales Heatmap", "Sales Agent", "Cost Monitor", "KPI"},
+    "AM": {"Sales Heatmap", "Sales Agent", "Cost Monitor", "KPI"},
 }
 DEFAULT_USER_ROLES = {
     "admin": "admin",
@@ -339,6 +329,8 @@ st.markdown(
     .accent-blue::before{background:linear-gradient(135deg,rgba(37,99,235,.22),rgba(30,64,175,.04));}.accent-blue::after{background:radial-gradient(circle,rgba(96,165,250,.42),transparent 70%)}
     .accent-purple::before{background:linear-gradient(135deg,rgba(124,58,237,.22),rgba(88,28,135,.04));}.accent-purple::after{background:radial-gradient(circle,rgba(167,139,250,.42),transparent 70%)}
     .accent-amber::before{background:linear-gradient(135deg,rgba(245,158,11,.20),rgba(120,53,15,.04));}.accent-amber::after{background:radial-gradient(circle,rgba(251,191,36,.40),transparent 70%)}
+    .accent-cyan::before{background:linear-gradient(135deg,rgba(6,182,212,.22),rgba(14,116,144,.04));}.accent-cyan::after{background:radial-gradient(circle,rgba(34,211,238,.40),transparent 70%)}
+    .accent-emerald::before{background:linear-gradient(135deg,rgba(16,185,129,.22),rgba(6,95,70,.04));}.accent-emerald::after{background:radial-gradient(circle,rgba(52,211,153,.40),transparent 70%)}
     .accent-rose::before{background:linear-gradient(135deg,rgba(225,29,72,.22),rgba(127,29,29,.04));}.accent-rose::after{background:radial-gradient(circle,rgba(251,113,133,.42),transparent 70%)}
     .disabled-card {filter:grayscale(1); opacity:.42; cursor:not-allowed; box-shadow:none;}
     .disabled-card:hover {transform:none; border-color:rgba(255,255,255,.12); box-shadow:none;}
@@ -368,10 +360,11 @@ if main_module == "Home":
     st.markdown('<div class="hero-subtitle">Role-based modules with a shared data layer</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
     modules = [
-        ("VALUE CHAIN", "📊", "Value Chain", "Pricing, margin, rebate, landed cost, and scenario simulation for cooling products.", "Overall/EXW/Landed Cost", "Value Chain", "teal"),
+        ("VALUE CHAIN", "📊", "Value Chain", "Pricing, margin, rebate, landed cost, and scenario simulation for cooling products.", "Overall/EXW/Landed Cost", "Value Chain", "emerald"),
         ("SALES HEATMAP", "🌍", "Sales Heatmap", "Store-level sales distribution, heatmap and opportunity gap analysis.", "Cluster Map/Heat Map", "Sales Heatmap", "blue"),
         ("SALES AGENT", "🤖", "Sales Agent", "AI sales diagnosis combining sales, product master, heatmap and value chain context.", "Generative Sales Summary", "Sales Agent", "purple"),
-        ("COST MONITOR", "📈", "Cost Monitor", "Cost trend tracking by model, category, series and cost type with latest change summary.", "EXW/Landed Trend", "Cost Monitor", "rose"),
+        ("COST MONITOR", "📈", "Cost Monitor", "Cost trend tracking by model, category, series and cost type with latest change summary.", "EXW/Landed Trend", "Cost Monitor", "cyan"),
+        ("KPI", "🎯", "KPI", "DN and POD KPI dashboards with trend, contribution tables and AI-style analysis.", "DN/POD Report", "KPI", "rose"),
         ("DATABASE", "🗂️", "Database", "Shared maintenance for product master, cost, store sales and Sales Agent sellout data.", "DBMS", "Database", "amber"),
     ]
     for i in range(0, len(modules), 3):
@@ -402,6 +395,11 @@ elif main_module == "Sales Agent":
         st.session_state["pending_module"] = "Sales Agent"; st.session_state["main_module"] = "Login" if not st.session_state.get("authenticated") else "No Access"; st.rerun()
     render_module_sidebar("Sales Agent", SALES_AGENT_PAGES, "sa_page")
     run_module(SALES_AGENT_PAGES[st.session_state["sa_page"]])
+elif main_module == "KPI":
+    if not st.session_state.get("authenticated") or not has_access("KPI"):
+        st.session_state["pending_module"] = "KPI"; st.session_state["main_module"] = "Login" if not st.session_state.get("authenticated") else "No Access"; st.rerun()
+    render_module_sidebar("KPI")
+    run_module(KPI_PAGE)
 elif main_module == "Database":
     if not st.session_state.get("authenticated") or not has_access("Database"):
         st.session_state["pending_module"] = "Database"; st.session_state["main_module"] = "Login" if not st.session_state.get("authenticated") else "No Access"; st.rerun()

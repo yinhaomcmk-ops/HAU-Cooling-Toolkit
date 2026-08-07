@@ -5,7 +5,16 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import streamlit as st
+try:
+    import streamlit as st
+except ModuleNotFoundError:  # Allows scripts/build_database.py to run outside Streamlit.
+    class _NoStreamlit:
+        def cache_data(self, *args, **kwargs):
+            def deco(func):
+                func.clear = lambda: None
+                return func
+            return deco
+    st = _NoStreamlit()
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = str(BASE_DIR / "data" / "app_data.db")
@@ -53,6 +62,8 @@ def init_product_master_db() -> None:
                 hq_model TEXT,
                 series TEXT,
                 series_name TEXT,
+                status TEXT,
+                year INTEGER,
                 updated_at TEXT
             )
             """
@@ -72,6 +83,8 @@ def init_product_master_db() -> None:
                     hq_model TEXT,
                     series TEXT,
                     series_name TEXT,
+                    status TEXT,
+                    year INTEGER,
                     updated_at TEXT
                 )
                 """
@@ -81,8 +94,8 @@ def init_product_master_db() -> None:
             conn.execute(
                 f"""
                 INSERT OR REPLACE INTO model_master
-                    (model_id, product_line, category, hau_model, hq_model, series, series_name, updated_at)
-                SELECT UPPER(TRIM(model)), product_line, category, UPPER(TRIM(model)), '', {series_expr}, {series_expr},
+                    (model_id, product_line, category, hau_model, hq_model, series, series_name, status, year, updated_at)
+                SELECT UPPER(TRIM(model)), product_line, category, UPPER(TRIM(model)), '', {series_expr}, {series_expr}, 'CURRENT', NULL,
                        COALESCE(updated_at, datetime('now'))
                 FROM model_master_old
                 WHERE model IS NOT NULL AND TRIM(model) <> ''
@@ -97,12 +110,15 @@ def init_product_master_db() -> None:
                 "hq_model": "TEXT",
                 "series": "TEXT",
                 "series_name": "TEXT",
+                "status": "TEXT",
+                "year": "INTEGER",
                 "updated_at": "TEXT",
             }.items():
                 _ensure_column(conn, "model_master", col, definition)
             conn.execute("UPDATE model_master SET hau_model = model_id WHERE hau_model IS NULL OR TRIM(hau_model) = ''")
             conn.execute("UPDATE model_master SET series = series_name WHERE (series IS NULL OR TRIM(series) = '') AND series_name IS NOT NULL")
             conn.execute("UPDATE model_master SET series_name = series WHERE (series_name IS NULL OR TRIM(series_name) = '') AND series IS NOT NULL")
+            conn.execute("UPDATE model_master SET status = 'CURRENT' WHERE status IS NULL OR TRIM(status) = ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_model_master_hau ON model_master(hau_model)")
         conn.commit()
 
@@ -338,8 +354,10 @@ PRODUCT_MASTER_ALIASES = {
     "hau_model": ["hau model", "hau_model", "model", "model_id", "model id", "sku", "客户型号", "hisense model"],
     "hq_model": ["hq model", "hq_model", "总部型号", "factory model", "factory_model"],
     "series": ["series", "series name", "series_name", "系列", "系列名"],
+    "status": ["status", "状态", "model status"],
+    "year": ["year", "年份", "launch year", "model year"],
 }
-PRODUCT_MASTER_COLUMNS = ["product_line", "category", "hau_model", "hq_model", "series"]
+PRODUCT_MASTER_COLUMNS = ["status", "year", "product_line", "category", "hau_model", "hq_model", "series"]
 
 
 def normalize_product_master_df(df_raw: pd.DataFrame) -> pd.DataFrame:
@@ -352,6 +370,8 @@ def normalize_product_master_df(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[c] = ""
     out = df[PRODUCT_MASTER_COLUMNS].copy()
     out["hau_model"] = out["hau_model"].apply(_norm_model)
+    out["status"] = out["status"].apply(_norm_text).str.upper().replace("", "CURRENT")
+    out["year"] = pd.to_numeric(out["year"], errors="coerce").astype("Int64")
     for c in ["product_line", "category", "hq_model", "series"]:
         out[c] = out[c].apply(_norm_text)
     out = out[(out["hau_model"] != "") & (out["hau_model"].str.lower() != "nan")]
@@ -369,8 +389,8 @@ def save_product_master_records(df: pd.DataFrame, replace_all: bool = True) -> N
             conn.execute(
                 """
                 INSERT INTO model_master
-                    (model_id, product_line, category, hau_model, hq_model, series, series_name, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (model_id, product_line, category, hau_model, hq_model, series, series_name, status, year, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(model_id) DO UPDATE SET
                     product_line=excluded.product_line,
                     category=excluded.category,
@@ -378,9 +398,11 @@ def save_product_master_records(df: pd.DataFrame, replace_all: bool = True) -> N
                     hq_model=excluded.hq_model,
                     series=excluded.series,
                     series_name=excluded.series_name,
+                    status=excluded.status,
+                    year=excluded.year,
                     updated_at=excluded.updated_at
                 """,
-                (r["hau_model"], r["product_line"], r["category"], r["hau_model"], r["hq_model"], r["series"], r["series"], now),
+                (r["hau_model"], r["product_line"], r["category"], r["hau_model"], r["hq_model"], r["series"], r["series"], r["status"], None if pd.isna(r["year"]) else int(r["year"]), now),
             )
         conn.commit()
     clear_all_caches()
@@ -391,7 +413,7 @@ def read_product_master_records() -> pd.DataFrame:
     with get_conn() as conn:
         df = pd.read_sql_query(
             """
-            SELECT product_line, category, model_id AS hau_model, hq_model, COALESCE(series, series_name, '') AS series, updated_at
+            SELECT COALESCE(status, 'CURRENT') AS status, year, product_line, category, model_id AS hau_model, hq_model, COALESCE(series, series_name, '') AS series, updated_at
             FROM model_master
             ORDER BY product_line, category, model_id
             """,
@@ -408,11 +430,11 @@ def clear_product_master_records() -> None:
     clear_all_caches()
 
 # Backwards-compatible names for existing Sales Agent code.
-MODEL_MASTER_EXPECTED = ["model", "product_line", "category", "series_name"]
+MODEL_MASTER_EXPECTED = ["model", "product_line", "category", "series_name", "status", "year"]
 
 def normalize_model_master_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     pm = normalize_product_master_df(df_raw)
-    return pm.rename(columns={"hau_model": "model", "series": "series_name"})[["model", "product_line", "category", "series_name"]]
+    return pm.rename(columns={"hau_model": "model", "series": "series_name"})[["model", "product_line", "category", "series_name", "status", "year"]]
 
 
 def save_model_master_records(df: pd.DataFrame, replace_all: bool = True) -> None:
@@ -423,7 +445,7 @@ def save_model_master_records(df: pd.DataFrame, replace_all: bool = True) -> Non
 
 def read_model_master_records() -> pd.DataFrame:
     pm = read_product_master_records()
-    return pm.rename(columns={"hau_model": "model", "series": "series_name"})[["model", "product_line", "category", "series_name"]]
+    return pm.rename(columns={"hau_model": "model", "series": "series_name"})[["model", "product_line", "category", "series_name", "status", "year"]]
 
 
 def clear_model_master_records() -> None:
@@ -835,6 +857,8 @@ def enrich_sales_agent_data(df: pd.DataFrame) -> pd.DataFrame:
     model_master = _load_model_master()
     # Strict shared rule: if HAU Model does not exist in Product Master, it does not count.
     out = out.merge(model_master, on="model", how="inner")
+    if "status" in out.columns:
+        out = out[out["status"].fillna("CURRENT").astype(str).str.upper().eq("CURRENT")]
     out["year"] = out["sales_date"].dt.year
     out["month"] = out["sales_date"].dt.month
     iso = out["sales_date"].dt.isocalendar()

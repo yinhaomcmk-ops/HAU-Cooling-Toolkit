@@ -143,9 +143,16 @@ save_global_params({
 g = load_global_params()
 
 st.subheader('Filters')
-c1, c2, c3 = st.columns([1, 1, 1.4])
+c0, c1, c2, c3 = st.columns([1, 1, 1, 1.4])
 product_line_options = ['All'] + sorted([x for x in df['product_line'].dropna().unique().tolist() if x])
 category_options = ['All'] + sorted([x for x in df['category'].dropna().unique().tolist() if x])
+with c0:
+    selected_status = st.selectbox(
+        'Status',
+        status_options,
+        index=get_saved_select_index(status_options, page_memory.get('selected_status', 'All')),
+        key='landed_selected_status',
+    )
 with c1:
     selected_product_line = st.selectbox(
         'Product Line',
@@ -161,6 +168,8 @@ with c2:
         key='landed_selected_category',
     )
 filtered = df.copy()
+if selected_status != 'All' and 'status' in filtered.columns:
+    filtered = filtered[filtered['status'].astype(str) == selected_status]
 if selected_product_line != 'All':
     filtered = filtered[filtered['product_line'] == selected_product_line]
 if selected_category != 'All':
@@ -176,6 +185,7 @@ with c3:
 if selected_model != 'All':
     filtered = filtered[filtered['model_id'].astype(str) == selected_model]
 save_page_memory('landed', {
+    'selected_status': selected_status,
     'selected_product_line': selected_product_line,
     'selected_category': selected_category,
     'selected_model': selected_model,
