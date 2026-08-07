@@ -150,9 +150,22 @@ save_global_params({
 g = load_global_params()
 
 st.subheader('Filters')
-c1, c2, c3 = st.columns([1, 1, 1.4])
+c0, c1, c2, c3 = st.columns([1, 1, 1, 1.4])
+status_options = ['All']
+if 'status' in df.columns:
+    status_options += sorted([
+        x for x in df['status'].fillna('').astype(str).unique().tolist()
+        if x
+    ])
 product_line_options = ['All'] + sorted([x for x in df['product_line'].dropna().unique().tolist() if x])
 category_options = ['All'] + sorted([x for x in df['category'].dropna().unique().tolist() if x])
+with c0:
+    selected_status = st.selectbox(
+        'Status',
+        status_options,
+        index=get_saved_select_index(status_options, page_memory.get('selected_status', 'All')),
+        key='special_selected_status',
+    )
 with c1:
     selected_product_line = st.selectbox(
         'Product Line',
@@ -168,6 +181,8 @@ with c2:
         key='special_selected_category',
     )
 filtered = df.copy()
+if selected_status != 'All' and 'status' in filtered.columns:
+    filtered = filtered[filtered['status'].astype(str) == selected_status]
 if selected_product_line != 'All':
     filtered = filtered[filtered['product_line'] == selected_product_line]
 if selected_category != 'All':
@@ -183,6 +198,7 @@ with c3:
 if selected_model != 'All':
     filtered = filtered[filtered['model_id'].astype(str) == selected_model]
 save_page_memory('special', {
+    'selected_status': selected_status,
     'selected_product_line': selected_product_line,
     'selected_category': selected_category,
     'selected_model': selected_model,
@@ -211,17 +227,26 @@ init_number_state(
     widget_key('loading_qty'),
     max(1, safe_int(overrides.get('loading_qty', selected_row.get('default_loading_qty', g['loading_qty'])), g['loading_qty']))
 )
+init_number_state(widget_key('expense_rate_pct'), rate_to_pct(safe_float(overrides.get('expense_rate', selected_row.get('expense_rate')))))
 init_number_state(widget_key('contractual_rebate_pct'), safe_float(overrides.get('contractual_rebate_pct', g['contractual_rebate_pct'])))
 init_number_state(widget_key('other_rebate_pct'), safe_float(overrides.get('other_rebate_pct', g['other_rebate_pct'])))
 init_number_state(widget_key('other_disc_value'), safe_float(overrides.get('other_disc_value', g['other_disc_value'])))
 
 r1, r2, r3, r4 = st.columns(4)
 with r1:
-    selling_price = st.number_input('Selling Price', min_value=0.0, format='%.0f', key=widget_key('selling_price'))
+    selling_price = st.number_input('Selling Price (AUD)', min_value=0.0, format='%.0f', key=widget_key('selling_price'))
 with r2:
     loading_qty = st.number_input('Loading Qty / 40HQ', min_value=1, step=1, key=widget_key('loading_qty'))
 with r3:
-    expense_rate = st.number_input('Expense Rate', min_value=0.0, value=safe_float(selected_row.get('expense_rate')), format='%.4f', disabled=True, key=widget_key('expense_rate'))
+    expense_rate_pct = st.number_input(
+        'Expense Rate (%)',
+        min_value=0.0,
+        max_value=100.0,
+        step=0.1,
+        format='%.2f',
+        key=widget_key('expense_rate_pct'),
+    )
+    expense_rate = pct_to_rate(expense_rate_pct)
 with r4:
     hq_upcost_pct = st.number_input('HQ Up Cost (%)', min_value=0.0, value=rate_to_pct(selected_row.get('hq_upcost_rate')), format='%.2f', disabled=True, key=widget_key('hq_upcost_rate'))
 
@@ -231,7 +256,7 @@ with r5:
 with r6:
     other_rebate_pct = st.number_input('Other Rebate (%)', min_value=0.0, max_value=100.0, format='%.1f', key=widget_key('other_rebate_pct'))
 with r7:
-    other_disc_value = st.number_input('Other Disc / Incentive ($)', format='%.0f', step=10.0, key=widget_key('other_disc_value'))
+    other_disc_value = st.number_input('Other Disc / Incentive (AUD)', format='%.0f', step=10.0, key=widget_key('other_disc_value'))
 
 metrics = calc_metrics(
     exw_cost_cny=safe_float(selected_row.get('exw_cost')),
@@ -256,8 +281,12 @@ save_global_params({
     'other_rebate_pct': float(other_rebate_pct), 'other_disc_value': float(other_disc_value),
 })
 state.setdefault('model_overrides', {})[model_key] = {
-    'selling_price': float(selling_price), 'loading_qty': int(loading_qty), 'contractual_rebate_pct': float(contractual_rebate_pct),
-    'other_rebate_pct': float(other_rebate_pct), 'other_disc_value': float(other_disc_value),
+    'selling_price': float(selling_price),
+    'loading_qty': int(loading_qty),
+    'expense_rate': float(expense_rate),
+    'contractual_rebate_pct': float(contractual_rebate_pct),
+    'other_rebate_pct': float(other_rebate_pct),
+    'other_disc_value': float(other_disc_value),
 }
 save_state(state)
 

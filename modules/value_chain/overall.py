@@ -249,7 +249,7 @@ def build_result_table(base_df, g):
         loading_qty = max(1, safe_int(row['柜量'], 100))
         exw_cost_cny = safe_float(row['结算成本'])
         hq_upcost_rate = safe_float(row['_upcost_rate'])
-        expense_rate = safe_float(row['_expense_rate'])
+        expense_rate = pct_to_rate(safe_float(g.get('overall_expense_rate', rate_to_pct(row['_expense_rate']))))
 
         m_regular = calc_metrics_exw(
             exw_cost_cny, regular_price, loading_qty,
@@ -332,7 +332,7 @@ def build_base_df(raw_df, overrides):
                 base_df.at[i, col] = ov[col]
 
     return base_df[[
-        '客户型号', '产品线', '品类', '成本月份', '柜量', '结算成本',
+        '客户型号', '产品线', '品类', 'status', 'year', '成本月份', '柜量', '结算成本',
         '常规价', '促销价', '大促价', '常规%', '促销%', '大促%',
         '_upcost_rate', '_expense_rate'
     ]].copy()
@@ -727,10 +727,6 @@ sea_freight_usd = st.sidebar.number_input('Sea Freight / 40HQ (USD)', min_value=
 clearance_aud = st.sidebar.number_input('Custom Clearance & Cartage (AUD)', min_value=0.0, value=safe_float(g['clearance_aud']), format='%.0f')
 insurance_pct = st.sidebar.number_input('Insurance (%)', min_value=0.0, value=rate_to_pct(g['insurance_rate']), format='%.1f', step=0.1)
 singa_upcost_pct = st.sidebar.number_input('Singa Upcost (%)', min_value=0.0, value=rate_to_pct(g['singa_upcost_rate']), format='%.1f', step=0.1)
-regular_rebate = st.sidebar.number_input('Regular Rebate (%)', min_value=0.0, value=safe_float(g['regular_rebate']), format='%.1f')
-promo_rebate = st.sidebar.number_input('Promo Rebate (%)', min_value=0.0, value=safe_float(g['promo_rebate']), format='%.1f')
-big_rebate = st.sidebar.number_input('Big Promo Rebate (%)', min_value=0.0, value=safe_float(g['big_rebate']), format='%.1f')
-
 save_global_params({
     **g,
     'fx_aud_to_cny': float(fx_aud_to_cny),
@@ -739,17 +735,66 @@ save_global_params({
     'clearance_aud': float(clearance_aud),
     'insurance_rate': pct_to_rate(insurance_pct),
     'singa_upcost_rate': pct_to_rate(singa_upcost_pct),
-    'regular_rebate': float(regular_rebate),
-    'promo_rebate': float(promo_rebate),
-    'big_rebate': float(big_rebate),
 })
 g = load_global_params()
 
+# ===== top calculation parameters =====
+st.subheader('Calculation Parameters')
+p0, p1, p2, p3 = st.columns(4)
+with p0:
+    regular_rebate = st.number_input(
+        'Regular Rebate (%)',
+        min_value=0.0,
+        max_value=100.0,
+        value=safe_float(g.get('regular_rebate', 0.0)),
+        step=0.1,
+        format='%.2f',
+        key='overall_regular_rebate_top',
+    )
+with p1:
+    promo_rebate = st.number_input(
+        'Promo Rebate (%)',
+        min_value=0.0,
+        max_value=100.0,
+        value=safe_float(g.get('promo_rebate', 0.0)),
+        step=0.1,
+        format='%.2f',
+        key='overall_promo_rebate_top',
+    )
+with p2:
+    big_rebate = st.number_input(
+        'Big Promo Rebate (%)',
+        min_value=0.0,
+        max_value=100.0,
+        value=safe_float(g.get('big_rebate', 0.0)),
+        step=0.1,
+        format='%.2f',
+        key='overall_big_rebate_top',
+    )
+with p3:
+    overall_expense_rate = st.number_input(
+        'Expense Rate (%)',
+        min_value=0.0,
+        max_value=100.0,
+        value=safe_float(g.get('overall_expense_rate', 29.0)),
+        step=0.1,
+        format='%.2f',
+        key='overall_expense_rate_top',
+    )
+
 # ===== filters =====
 st.subheader('Filters')
-f1, f2, f3 = st.columns([1, 1, 1.4])
+f0, f1, f2, f3 = st.columns([1, 1, 1, 1.4])
 product_line_options = ['All'] + sorted(full_source_df['产品线'].dropna().unique().tolist())
 category_options = ['All'] + sorted(full_source_df['品类'].dropna().unique().tolist())
+status_options = ['All'] + sorted(full_source_df.get('status', pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+with f0:
+    selected_status = st.selectbox(
+        'Status',
+        status_options,
+        index=get_saved_select_index(status_options, page_memory.get('selected_status', 'All')),
+        key='overall_selected_status',
+    )
 with f1:
     selected_product_line = st.selectbox(
         'Product Line',
@@ -766,6 +811,8 @@ with f2:
     )
 
 filtered_for_model = full_source_df.copy()
+if selected_status != 'All' and 'status' in filtered_for_model.columns:
+    filtered_for_model = filtered_for_model[filtered_for_model['status'].astype(str) == selected_status]
 if selected_product_line != 'All':
     filtered_for_model = filtered_for_model[filtered_for_model['产品线'] == selected_product_line]
 if selected_category != 'All':
@@ -773,26 +820,39 @@ if selected_category != 'All':
 
 model_options = ['All'] + sorted(filtered_for_model['客户型号'].dropna().unique().tolist())
 with f3:
-    selected_model = st.selectbox(
+    selected_models = st.multiselect(
         'Model',
-        model_options,
-        index=get_saved_select_index(model_options, page_memory.get('selected_model', 'All')),
-        key='overall_selected_model',
+        model_options[1:],
+        default=page_memory.get('selected_models', []),
+        key='overall_selected_models',
     )
 
 filtered_source_df = filtered_for_model.copy()
-if selected_model != 'All':
-    filtered_source_df = filtered_source_df[filtered_source_df['客户型号'] == selected_model]
+if selected_models:
+    filtered_source_df = filtered_source_df[
+        filtered_source_df['客户型号'].astype(str).isin(selected_models)
+    ]
 
 save_page_memory('overall', {
+    'selected_status': selected_status,
     'selected_product_line': selected_product_line,
     'selected_category': selected_category,
-    'selected_model': selected_model,
+    'selected_models': selected_models,
 })
 
 if filtered_source_df.empty:
     st.warning('当前筛选条件下没有数据。')
     st.stop()
+
+
+save_global_params({
+    **g,
+    'regular_rebate': float(regular_rebate),
+    'promo_rebate': float(promo_rebate),
+    'big_rebate': float(big_rebate),
+    'overall_expense_rate': float(overall_expense_rate),
+})
+g = load_global_params()
 
 # ===== synchronized sort state =====
 # Native st.data_editor header sorting is frontend-only and cannot sync a separate
@@ -904,13 +964,13 @@ with header_right:
         st.markdown('<div class="vc-table-toolbar-spacer"></div>', unsafe_allow_html=True)
 
 save_page_memory('overall', {
+    'selected_status': selected_status,
     'selected_product_line': selected_product_line,
     'selected_category': selected_category,
-    'selected_model': selected_model,
-    'selected_sort_col': st.session_state.get('overall_selected_sort_col', selected_sort_col),
-    'selected_sort_order': st.session_state.get('overall_selected_sort_order', selected_sort_order),
+    'selected_models': selected_models,
 })
-
+def calc_table_height(row_count, row_height=35, header_height=38, max_height=650, min_height=160):
+    return min(max_height, max(min_height, header_height + row_count * row_height))
 # ===== table row =====
 left_col, right_col = st.columns([3.7, 3.3], gap='small')
 
@@ -931,7 +991,7 @@ with left_col:
             '综合返利额': st.column_config.NumberColumn('综合返利额', format='%.0f'),
             'NETNET': st.column_config.NumberColumn('NETNET', format='%.0f'),
             '总成本': st.column_config.NumberColumn('总成本', format='%.0f'),
-            'Expense Rate': st.column_config.NumberColumn('Expense Rate', format='%.0f%%'),
+            'Expense Rate': st.column_config.NumberColumn('Expense Rate', format='%.1f%%'),
             '毛利率': st.column_config.NumberColumn('毛利率', format='%.1f%%'),
             '净利率': st.column_config.NumberColumn('净利率', format='%.1f%%'),
             '常规价': st.column_config.NumberColumn('常规价', format='$ %,.0f'),
@@ -948,7 +1008,7 @@ with left_col:
             '清关/台', '保险', '综合返利额', '开票价'
         ],
         hide_index=True,
-        height=600,
+        height=calc_table_height(len(filtered_source_df)),
         use_container_width=True,
         key='overall_single_table_editor_sync',
     )
@@ -1060,8 +1120,8 @@ with right_col:
         },
         disabled=['A常规价差', 'A促销价差', 'B常规价差', 'B促销价差'],
         hide_index=True,
+        height=calc_table_height(len(filtered_source_df)),
         use_container_width=True,
-          height=600,
         key='overall_competitor_table_editor',
     )
 

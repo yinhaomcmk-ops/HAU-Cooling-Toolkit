@@ -5,3 +5,13 @@
 __pycache__/
 *.pyc
 .vscode/
+
+# Runtime database files
+data/app_data.db
+data/app_data.db-wal
+data/app_data.db-shm
+data/app_data_refresh_tmp_*.db
+
+# Python cache
+__pycache__/
+*.pyc

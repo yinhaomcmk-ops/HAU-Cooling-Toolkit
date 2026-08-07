@@ -150,6 +150,10 @@ st.caption("Interactive sales map and heatmap with persistent local data storage
 store_df = read_store_locations()
 sales_df = read_sales_records()
 product_master = read_product_master_records()
+# Sales Heatmap only uses CURRENT models to avoid mixing launch/future products.
+if not sales_df.empty and not product_master.empty and "status" in product_master.columns:
+    current_models = set(product_master.loc[product_master["status"].fillna("CURRENT").astype(str).str.upper().eq("CURRENT"), "hau_model"].astype(str).str.upper())
+    sales_df = sales_df[sales_df["model"].astype(str).str.upper().isin(current_models)].copy()
 
 if store_df.empty:
     st.warning("No saved store location data yet. Please go to Database > Sales Heatmap Upload first.")

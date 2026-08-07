@@ -75,7 +75,7 @@ def get_openai_api_key() -> str | None:
     return os.getenv("OPENAI_API_KEY")
 
 
-def get_openai_model(default: str = "gpt-4.1-mini") -> str:
+def get_openai_model(default: str = "gpt-5-mini") -> str:
     try:
         model = st.secrets.get("OPENAI_MODEL")
         if model:
@@ -562,7 +562,7 @@ def load_value_chain_context(filters: dict[str, Any] | None = None, limit: int =
 
             summaries = []
             for table in tables:
-                df = _read_table_if_exists(conn, table, limit=100000)
+                df = _read_table_if_exists(conn, table, limit=5000)
                 if df.empty:
                     continue
                 cols = df.columns.tolist()
@@ -633,14 +633,14 @@ def build_analysis_context(
             "models": int(filtered_current["model"].nunique(dropna=True)),
         },
         "period_comparison_definition": diagnostic_tables.get("periods", pd.DataFrame()).to_dict("records"),
-        "channel_diagnosis": diagnostic_tables.get("channel", pd.DataFrame()).head(15).to_dict("records"),
-        "category_diagnosis": diagnostic_tables.get("category", pd.DataFrame()).head(15).to_dict("records"),
-        "model_impact": diagnostic_tables.get("model", pd.DataFrame()).head(30).to_dict("records"),
+        "channel_diagnosis": diagnostic_tables.get("channel", pd.DataFrame()).head(5).to_dict("records"),
+        "category_diagnosis": diagnostic_tables.get("category", pd.DataFrame()).head(5).to_dict("records"),
+        "model_impact": diagnostic_tables.get("model", pd.DataFrame()).head(10).to_dict("records"),
         "top_models": (
             filtered_current.groupby(["category", "model"], dropna=True)
             .agg(sales_qty=("sales_qty", "sum"), avg_price=("price", "mean"), sales_value=("sales_value_est", "sum"))
             .sort_values("sales_qty", ascending=False)
-            .head(25)
+            .head(10)
             .reset_index()
             .to_dict("records")
         ),
@@ -859,7 +859,7 @@ def load_heatmap_context(filters: dict[str, Any] | None = None, limit: int = 20)
                        l.retailer, l.region, l.latitude, l.longitude
                 FROM sales_records s
                 LEFT JOIN store_locations l ON s.business_name = l.business_name
-                LIMIT 100000
+                LIMIT 10000
                 """,
                 conn,
             )

@@ -58,6 +58,8 @@ def init_db():
             hq_model TEXT,
             series TEXT,
             series_name TEXT,
+            status TEXT,
+            year INTEGER,
             updated_at TEXT
         )
         """
@@ -75,6 +77,8 @@ def init_db():
                 hq_model TEXT,
                 series TEXT,
                 series_name TEXT,
+                status TEXT,
+                year INTEGER,
                 updated_at TEXT
             )
             """
@@ -84,8 +88,8 @@ def init_db():
         cur.execute(
             f"""
             INSERT OR REPLACE INTO model_master
-                (model_id, product_line, category, hau_model, hq_model, series, series_name, updated_at)
-            SELECT UPPER(TRIM(model)), product_line, category, UPPER(TRIM(model)), '', {series_expr}, {series_expr}, COALESCE(updated_at, datetime('now'))
+                (model_id, product_line, category, hau_model, hq_model, series, series_name, status, year, updated_at)
+            SELECT UPPER(TRIM(model)), product_line, category, UPPER(TRIM(model)), '', {series_expr}, {series_expr}, 'CURRENT', NULL, COALESCE(updated_at, datetime('now'))
             FROM model_master_old
             WHERE model IS NOT NULL AND TRIM(model) <> ''
             """
@@ -99,10 +103,13 @@ def init_db():
             "hq_model": "TEXT",
             "series": "TEXT",
             "series_name": "TEXT",
+            "status": "TEXT",
+            "year": "INTEGER",
             "updated_at": "TEXT",
         }.items():
             _ensure_column(conn, "model_master", col, definition)
         cur.execute("UPDATE model_master SET hau_model = model_id WHERE hau_model IS NULL OR TRIM(hau_model) = ''")
+        cur.execute("UPDATE model_master SET status = 'CURRENT' WHERE status IS NULL OR TRIM(status) = ''")
 
     cur.execute(
         """
@@ -164,7 +171,7 @@ def get_model_master():
     init_db()
     return query_df(
         """
-        SELECT model_id, product_line, category
+        SELECT model_id, product_line, category, COALESCE(status, 'CURRENT') AS status, year
         FROM model_master
         ORDER BY model_id
         """
@@ -180,13 +187,16 @@ def upsert_model_master(df: pd.DataFrame):
         category = str(r.get("品类", r.get("category", ""))).strip() if pd.notna(r.get("品类", r.get("category", ""))) else ""
         hq_model = str(r.get("HQ Model", r.get("hq_model", ""))).strip() if pd.notna(r.get("HQ Model", r.get("hq_model", ""))) else ""
         series = str(r.get("Series", r.get("series", r.get("series_name", "")))).strip() if pd.notna(r.get("Series", r.get("series", r.get("series_name", "")))) else ""
+        status = str(r.get("Status", r.get("status", "CURRENT"))).strip().upper() or "CURRENT"
+        year = pd.to_numeric(r.get("Year", r.get("year", None)), errors="coerce")
+        year = None if pd.isna(year) else int(year)
         if model_id:
-            rows.append((model_id, product_line, category, model_id, hq_model, series, series))
+            rows.append((model_id, product_line, category, model_id, hq_model, series, series, status, year))
     if rows:
         execute_sql(
             """
-            INSERT OR REPLACE INTO model_master (model_id, product_line, category, hau_model, hq_model, series, series_name, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            INSERT OR REPLACE INTO model_master (model_id, product_line, category, hau_model, hq_model, series, series_name, status, year, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             """,
             rows,
             many=True,
@@ -278,7 +288,7 @@ def get_latest_exw():
     init_db()
     return query_df(
         """
-        SELECT e.model_id, m.product_line, m.category, e.cost_month, e.exw_cost
+        SELECT e.model_id, m.product_line, m.category, COALESCE(m.status, 'CURRENT') AS status, m.year, e.cost_month, e.exw_cost
         FROM exw_cost e
         INNER JOIN (SELECT model_id, MAX(cost_month) AS max_month FROM exw_cost GROUP BY model_id) t
             ON e.model_id = t.model_id AND e.cost_month = t.max_month
@@ -294,7 +304,7 @@ def get_latest_landed():
     init_db()
     return query_df(
         """
-        SELECT l.model_id, m.product_line, m.category, l.cost_month, l.landed_cost
+        SELECT l.model_id, m.product_line, m.category, COALESCE(m.status, 'CURRENT') AS status, m.year, l.cost_month, l.landed_cost
         FROM landed_cost l
         INNER JOIN (SELECT model_id, MAX(cost_month) AS max_month FROM landed_cost GROUP BY model_id) t
             ON l.model_id = t.model_id AND l.cost_month = t.max_month

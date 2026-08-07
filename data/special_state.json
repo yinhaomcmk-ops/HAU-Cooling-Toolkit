@@ -16,6 +16,7 @@
     "HRBF126": {
       "selling_price": 299.0,
       "loading_qty": 285,
+      "expense_rate": 0.29,
       "contractual_rebate_pct": 35.0,
       "other_rebate_pct": 0.0,
       "other_disc_value": 0.0
@@ -48,11 +49,12 @@
       "other_disc_value": 0.0
     },
     "HRCD615TBWV": {
-      "selling_price": 3499.0,
+      "selling_price": 3299.0,
       "loading_qty": 36,
-      "contractual_rebate_pct": 38.0,
+      "expense_rate": 0.0,
+      "contractual_rebate_pct": 35.0,
       "other_rebate_pct": 0.0,
-      "other_disc_value": 0.0
+      "other_disc_value": -100.0
     },
     "HRSBS540BW": {
       "selling_price": 999.0,
@@ -79,6 +81,38 @@
       "selling_price": 999.0,
       "loading_qty": 63,
       "contractual_rebate_pct": 30.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRTF497SW": {
+      "selling_price": 899.0,
+      "loading_qty": 63,
+      "expense_rate": 0.29,
+      "contractual_rebate_pct": 30.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRVF384S": {
+      "selling_price": 1199.0,
+      "loading_qty": 66,
+      "expense_rate": 0.21,
+      "contractual_rebate_pct": 36.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRBM419SW": {
+      "selling_price": 899.0,
+      "loading_qty": 67,
+      "expense_rate": 0.29,
+      "contractual_rebate_pct": 35.0,
+      "other_rebate_pct": 0.0,
+      "other_disc_value": 0.0
+    },
+    "HRBM503E": {
+      "selling_price": 1499.0,
+      "loading_qty": 63,
+      "expense_rate": 0.29,
+      "contractual_rebate_pct": 35.0,
       "other_rebate_pct": 0.0,
       "other_disc_value": 0.0
     }

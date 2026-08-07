@@ -1,0 +1,14 @@
+{
+  "overall": {
+    "selected_status": "CURRENT",
+    "selected_product_line": "Refrigerator",
+    "selected_category": "Bottom Mount",
+    "selected_models": []
+  },
+  "special": {
+    "selected_status": "All",
+    "selected_product_line": "All",
+    "selected_category": "All",
+    "selected_model": "HRBM503E"
+  }
+}

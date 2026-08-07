@@ -361,7 +361,18 @@ def _style_summary(df: pd.DataFrame):
 
 
 def _render_metric_card(label: str, value: str, delta: str | None = None):
-    st.metric(label, value, delta=delta)
+    delta = delta or ""
+    delta_cls = "pos" if str(delta).strip().startswith("+") or "Retailers" in str(delta) else ("neg" if str(delta).strip().startswith("-") else "neu")
+    st.markdown(
+        f"""
+        <div class="sales-metric-card">
+            <div class="sales-metric-label">{label}</div>
+            <div class="sales-metric-value">{value}</div>
+            <div class="sales-metric-delta {delta_cls}">{delta}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: dict) -> None:
@@ -381,11 +392,22 @@ def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: di
     st.markdown(
         """
         <style>
-        div[data-testid="stMetric"] {background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.09); padding:12px 14px; border-radius:14px;}
+        .sales-dashboard-hero {padding:18px 20px;border:1px solid rgba(255,255,255,.10);border-radius:22px;background:linear-gradient(135deg,rgba(124,58,237,.12),rgba(37,99,235,.08),rgba(15,23,42,.25));box-shadow:0 18px 38px rgba(0,0,0,.22);margin:10px 0 18px;}
+        .sales-section-title {margin:26px 0 12px 0;font-size:1.35rem;font-weight:900;color:#F2F9FF;letter-spacing:.2px;}
+        .sales-metric-card {min-height:102px;padding:15px 16px;border-radius:18px;border:1px solid rgba(255,255,255,.11);background:linear-gradient(180deg,rgba(255,255,255,.065),rgba(255,255,255,.025));box-shadow:0 12px 32px rgba(0,0,0,.20);}
+        .sales-metric-label {font-size:.78rem;font-weight:800;color:rgba(226,241,248,.68);text-transform:uppercase;letter-spacing:.06em;}
+        .sales-metric-value {font-size:2rem;font-weight:900;color:#F5FBFF;line-height:1.15;margin-top:7px;}
+        .sales-metric-delta {display:inline-block;margin-top:8px;padding:3px 8px;border-radius:999px;font-size:.78rem;font-weight:900;background:rgba(255,255,255,.07);color:rgba(231,242,248,.80);}
+        .sales-metric-delta.pos {background:rgba(16,185,129,.18);color:#A7F3D0;}_build_ai_tables
+        .sales-metric-delta.neg {background:rgba(244,63,94,.18);color:#FDA4AF;}
+        .sales-chart-panel {border:1px solid rgba(255,255,255,.09);border-radius:18px;padding:14px 16px;background:rgba(255,255,255,.028);box-shadow:0 12px 30px rgba(0,0,0,.15);}
+        div[data-testid="stDataFrame"] {box-shadow:0 12px 30px rgba(0,0,0,.15);}
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+    st.markdown('<div class="sales-dashboard-hero"><b>Sales Agent Dashboard</b><br><span style="color:rgba(225,240,248,.72);">Executive sellout view with model mix, price band, channel efficiency and floating AI assistant.</span></div>', unsafe_allow_html=True)
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
@@ -401,7 +423,7 @@ def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: di
 
     st.caption("Current scope: " + " | ".join([f"{k}: {v}" for k, v in filters.items()]))
 
-    st.markdown("---")
+    st.markdown('<div class="sales-section-title">Executive View</div>', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1.1, 1.4, 1.1])
 
     with c1:
@@ -441,6 +463,7 @@ def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: di
         else:
             st.bar_chart(eff.set_index("channel")["turnover"], height=280, use_container_width=True)
 
+    st.markdown('<div class="sales-section-title">Trend & Impact</div>', unsafe_allow_html=True)
     c4, c5 = st.columns([1.2, 1])
     with c4:
         st.subheader("Sales Trend")
@@ -467,7 +490,7 @@ def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: di
             growth_decline = growth_decline.drop_duplicates("model")
             st.bar_chart(growth_decline.set_index("model")["Impact"], height=300, use_container_width=True)
 
-    st.markdown("---")
+    st.markdown('<div class="sales-section-title">Detailed Breakdown</div>', unsafe_allow_html=True)
     t1, t2, t3, t4 = st.tabs(["Product Line", "Category", "Retailer", "Model"])
 
     with t1:
@@ -501,6 +524,7 @@ def _render_dashboard(df: pd.DataFrame, years: tuple[int, int, int], filters: di
 # -----------------------------
 # AI assistant beside dashboard
 # -----------------------------
+@st.cache_data(show_spinner=False, ttl=300)
 def _build_ai_tables(df: pd.DataFrame, years: tuple[int, int, int]) -> dict:
     if df.empty:
         return {}
@@ -690,11 +714,25 @@ def _render_ai_chatbox(df: pd.DataFrame, years: tuple[int, int, int], filters: d
         st.session_state["sales_dashboard_ai_visible"] = True
 
     ai_ready = is_openai_ready()
-    default_model = get_openai_model()
-    model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
-    if default_model not in model_options:
-        model_options.insert(0, default_model)
-    current_model = st.session_state.get("sales_dashboard_openai_model", default_model)
+    default_model = "gpt-5-mini"
+
+    model_options = [
+        "gpt-5-mini",
+        "gpt-5",
+        "gpt-4o-mini",
+        "gpt-4o",
+    ]
+
+    if (
+        st.session_state.get("sales_dashboard_openai_model")
+        in ["gpt-4.1", "gpt-4.1-mini"]
+    ):
+        st.session_state["sales_dashboard_openai_model"] = "gpt-5-mini"
+
+    current_model = st.session_state.get(
+        "sales_dashboard_openai_model",
+        default_model
+    )
 
     if not st.session_state["sales_dashboard_ai_visible"]:
         st.markdown('<div id="sales-ai-launcher-anchor" class="sales-ai-spacer"></div>', unsafe_allow_html=True)
@@ -783,9 +821,10 @@ def _render_ai_chatbox(df: pd.DataFrame, years: tuple[int, int, int], filters: d
                     filters=filters,
                     use_openai=use_openai,
                     model=selected_model,
-                    include_heatmap=True,
-                    include_value_chain=True,
+                    include_heatmap=False,
+                    include_value_chain=False,
                 )
+            
             st.session_state["sales_dashboard_chat_history"].append({"role": "assistant", "content": answer})
             st.rerun()
 

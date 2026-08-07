@@ -245,7 +245,7 @@ with st.sidebar:
         key="sales_agent_use_openai",
     )
 
-    model_options = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
+    model_options = ["gpt-5-mini", "gpt-5", "gpt-4o-mini", "gpt-4o"]
     if default_openai_model not in model_options:
         model_options.insert(0, default_openai_model)
 
@@ -256,6 +256,13 @@ with st.sidebar:
         model_options,
         index=model_index,
         key="sales_agent_openai_model",
+    )
+
+    analysis_mode = st.radio(
+        "Analysis Mode",
+        ["Fast", "Deep"],
+        horizontal=True,
+        key="sales_ai_mode",
     )
 
     st.markdown("---")
@@ -477,8 +484,8 @@ if run_qa:
             filters=active_filters,
             use_openai=use_openai,
             model=openai_model,
-            include_heatmap=True,
-            include_value_chain=True,
+            include_heatmap=(analysis_mode == "Deep"),
+            include_value_chain=(analysis_mode == "Deep"),
         )
 
 st.markdown(st.session_state.get("sales_agent_answer", "Ask a question and click **Run AI analysis**."))
@@ -510,8 +517,8 @@ if refresh_summary:
             filters=active_filters,
             use_openai=use_openai,
             model=openai_model,
-            include_heatmap=True,
-            include_value_chain=True,
+            include_heatmap=(analysis_mode == "Deep"),
+            include_value_chain=(analysis_mode == "Deep"),
         )
         st.session_state["sales_agent_summary"] = summary_text
         st.session_state["sales_agent_summary_meta"] = summary_meta
